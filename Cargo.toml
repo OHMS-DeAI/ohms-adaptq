@@ -1,0 +1,57 @@
+[package]
+name = "ohms-adaptq"
+version = "1.0.0"
+edition = "2021"
+description = "Adaptive Progressive Quantization engine for OHMS"
+license = "MIT"
+repository = "https://github.com/ohms-project/ohms-adaptq"
+homepage = "https://ohms-project.org"
+
+[[bin]]
+name = "apq"
+path = "src/bin/apq.rs"
+
+[dependencies]
+# Core dependencies
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+clap = { version = "4.0", features = ["derive"] }
+anyhow = "1.0"
+thiserror = "1.0"
+
+# Cryptography
+sha2 = "0.10"
+hex = "0.4"
+
+# Quantization and ML
+candle-core = "0.3"
+candle-nn = "0.3"
+candle-transformers = "0.3"
+safetensors = "0.4"
+
+# HuggingFace integration
+hf-hub = "0.3"
+tokenizers = "0.15"
+
+# File I/O and compression
+tar = "0.4"
+flate2 = "1.0"
+
+# Progress and logging
+indicatif = "0.17"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+tempfile = "3.0"
+assert_approx_eq = "1.1"
+
+[features]
+default = ["cli"]
+cli = ["clap", "indicatif", "tracing-subscriber"]
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
