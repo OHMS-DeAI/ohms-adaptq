@@ -113,7 +113,7 @@ fn main() -> anyhow::Result<()> {
             pb.set_message("Initializing Super-APQ engine...");
             pb.inc(10);
             
-            let mut super_apq = SuperAPQ::new(config);
+            let super_apq = SuperAPQ::new(config);
             
             pb.set_message("Detecting model architecture...");
             pb.inc(10);

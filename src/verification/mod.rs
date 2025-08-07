@@ -1,7 +1,7 @@
 // Verification Module - Enhanced for Super-APQ
 // Validates ultra-compressed models maintain capability
 
-use crate::super_apq::{SuperQuantizedModel, VerificationReport as SuperReport};
+use crate::super_apq::SuperQuantizedModel;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 

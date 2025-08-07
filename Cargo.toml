@@ -31,14 +31,14 @@ sha2 = "0.10"
 hex = "0.4"
 
 # Quantization and ML
-candle-core = "0.3"
-candle-nn = "0.3"
-candle-transformers = "0.3"
-safetensors = "0.4"
+candle-core = "0.9"
+candle-nn = "0.9"
+candle-transformers = "0.9"
+safetensors = "0.6"
 
 # HuggingFace integration
-hf-hub = "0.3"
-tokenizers = "0.15"
+hf-hub = "0.4"
+tokenizers = "0.21"
 
 # File I/O and compression
 tar = "0.4"
@@ -56,8 +56,6 @@ assert_approx_eq = "1.1"
 
 [features]
 default = []
-
-[workspace]
 
 [profile.release]
 lto = true

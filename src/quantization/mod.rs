@@ -3,8 +3,7 @@
 
 use crate::{Result, SuperAPQ, SuperAPQConfig};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
-use hex;
+use sha2::Digest;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QuantizationResult {

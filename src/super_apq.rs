@@ -1,7 +1,7 @@
 // Super-APQ: Revolutionary Zero-Cost Universal Quantization System
 // Based on cutting-edge research from BitNet, GPTQT, and novel innovations
 
-use crate::{ApqConfig, Result};
+use crate::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -132,9 +132,11 @@ impl HadamardTransformer {
     }
     
     fn get_hadamard_matrix(&mut self, n: usize) -> &Vec<Vec<f32>> {
-        self.matrix_cache.entry(n).or_insert_with(|| {
-            self.generate_hadamard_matrix(n)
-        })
+        if !self.matrix_cache.contains_key(&n) {
+            let matrix = self.generate_hadamard_matrix(n);
+            self.matrix_cache.insert(n, matrix);
+        }
+        &self.matrix_cache[&n]
     }
     
     fn generate_hadamard_matrix(&self, n: usize) -> Vec<Vec<f32>> {
@@ -191,20 +193,21 @@ impl CompressionEngine {
         
         // Step 3: Neural compression for further reduction
         let neural_compressed = self.neural_compressor.compress(&codebook);
+        let compressed_size = neural_compressed.len();
+        let original_size = weights.values.len() * std::mem::size_of::<i8>();
         
         CompressedModel {
             data: neural_compressed,
             metadata: CompressionMetadata {
-                original_size: weights.values.len() * std::mem::size_of::<i8>(),
-                compressed_size: neural_compressed.len(),
-                compression_ratio: (weights.values.len() * std::mem::size_of::<i8>()) as f32 
-                    / neural_compressed.len() as f32,
+                original_size,
+                compressed_size,
+                compression_ratio: original_size as f32 / compressed_size as f32,
             },
         }
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompressedModel {
     pub data: Vec<u8>,
     pub metadata: CompressionMetadata,
