@@ -1,12 +1,18 @@
 pub mod quantization;
 pub mod manifest;
 pub mod verification;
-pub mod super_apq;
+pub mod super_apq_min;
+pub mod universal_loader;
+pub mod quantizer;
+pub mod model_fetcher;
 
 pub use quantization::*;
 pub use manifest::*;
 pub use verification::*;
-pub use super_apq::{SuperAPQ, SuperAPQConfig, SuperQuantizedModel};
+pub use super_apq_min::{SuperAPQ, SuperAPQConfig, SuperQuantizedModel};
+pub use universal_loader::{UniversalModel, UniversalLoader, load_any_model, find_model};
+pub use quantizer::{Quantizer, QuantizedModel, QuantizationConfig, QuantizationMethod};
+pub use model_fetcher::{ModelFetcher, ModelSource, parse_model_source};
 
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 

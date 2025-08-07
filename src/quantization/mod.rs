@@ -36,20 +36,7 @@ pub struct ApqQuantizer {
 impl ApqQuantizer {
     pub fn new(config: crate::ApqConfig) -> Self {
         // Convert legacy config to Super-APQ config
-        let super_config = SuperAPQConfig {
-            weight_bits: 1.58, // Use revolutionary 1.58-bit quantization
-            activation_bits: 4,
-            use_bitnet_v2: true,
-            enable_delta_compression: true,
-            enable_shared_codebooks: true,
-            enable_neural_compression: true,
-            auto_detect_architecture: true,
-            adaptive_quantization: true,
-            preserve_outliers: true,
-            use_self_distillation: true,
-            confidence_aware_kld: true,
-            feature_alignment: true,
-        };
+        let super_config = SuperAPQConfig::default();
         
         Self {
             super_apq: SuperAPQ::new(super_config),
@@ -111,7 +98,7 @@ impl ApqQuantizer {
 }
 
 // Re-export for compatibility
-pub use crate::super_apq::{
+pub use crate::super_apq_min::{
     SuperAPQ as ModernQuantizer,
     SuperAPQConfig as ModernConfig,
     SuperQuantizedModel as ModernResult,

@@ -1,13 +1,11 @@
-// Legacy APQ CLI - Redirects to Super-APQ
-// Maintained for backward compatibility
-
 use clap::{Parser, Subcommand};
-use std::process::Command;
+use ohms_adaptq::{
+    VerificationConfig, VerificationEngine, Quantizer, QuantizationConfig, QuantizationMethod,
+    UniversalLoader, ModelFetcher, parse_model_source,
+};
 
 #[derive(Parser)]
-#[command(name = "apq")]
-#[command(about = "Legacy APQ CLI - Now powered by Super-APQ")]
-#[command(version)]
+#[command(name = "apq", version, about = "OHMS Adaptive Quantization - Production CLI", long_about = None)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -15,74 +13,83 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Quantize a model (redirects to Super-APQ)
     Quantize {
-        model: String,
-        #[arg(short, long)]
-        output: Option<String>,
-        #[arg(short, long)]
-        bits: Option<u8>,
+        #[arg(long, help = "Model source: hf:<repo>[:file] | url:<http(s)://...> | ollama:<name> | file:/abs/path | /abs/path")] model: String,
+        #[arg(long, default_value = "SpinQuant")] method: String,
+        #[arg(long, default_value_t = 1.58)] weight_bits: f32,
+        #[arg(long, default_value_t = 4)] activation_bits: u8,
+        #[arg(long, default_value_t = 128)] group_size: usize,
+        #[arg(long, default_value_t = true)] per_channel: bool,
     },
-    /// Verify artifacts
     Verify {
-        path: String,
+        #[arg(long)] original: String,
+        #[arg(long)] quantized: String,
     },
-    /// Generate report
-    Report {
-        path: String,
-        #[arg(short, long)]
-        format: Option<String>,
-    },
+    Info {},
 }
 
-fn main() {
-    println!("╔══════════════════════════════════════════════════════════╗");
-    println!("║  NOTICE: APQ has been upgraded to Super-APQ!            ║");
-    println!("║  You're now using 1000x compression technology.         ║");
-    println!("║  Use 'super-apq' directly for all new features.         ║");
-    println!("╚══════════════════════════════════════════════════════════╝");
-    println!();
-    
-    let cli = Cli::parse();
-    
-    // Redirect to super-apq with equivalent commands
-    let status = match cli.command {
-        Commands::Quantize { model, output, .. } => {
-            let mut cmd = Command::new("super-apq");
-            cmd.arg("quantize")
-               .arg("--model").arg(&model);
-            
-            if let Some(out) = output {
-                cmd.arg("--output").arg(out);
-            }
-            
-            cmd.arg("--zero-cost")
-               .status()
-               .expect("Failed to execute super-apq")
-        },
-        
-        Commands::Verify { path } => {
-            Command::new("super-apq")
-                .arg("verify")
-                .arg(path)
-                .arg("--perplexity")
-                .arg("--accuracy")
-                .status()
-                .expect("Failed to execute super-apq")
-        },
-        
-        Commands::Report { path, format } => {
-            let mut cmd = Command::new("super-apq");
-            cmd.arg("stats").arg(path);
-            
-            if let Some(fmt) = format {
-                println!("Format option '{}' noted. Super-APQ provides enhanced statistics.", fmt);
-            }
-            
-            cmd.status()
-                .expect("Failed to execute super-apq")
-        },
-    };
-    
-    std::process::exit(status.code().unwrap_or(1));
+fn parse_method(name: &str) -> QuantizationMethod {
+    match name.to_lowercase().as_str() {
+        "spinquant" => QuantizationMethod::SpinQuant,
+        "ternaryllmdlt" | "ternary" => QuantizationMethod::TernaryLLMDLT,
+        "vptq" => QuantizationMethod::VPTQ,
+        "duquant" => QuantizationMethod::DuQuant,
+        "hyperternary" => QuantizationMethod::HyperTernary,
+        "adaptivebits" => QuantizationMethod::AdaptiveBits,
+        "zeroshot" => QuantizationMethod::ZeroShot,
+        "neuralquant" => QuantizationMethod::NeuralQuant,
+        "gptq" => QuantizationMethod::GPTQ,
+        "awq" => QuantizationMethod::AWQ,
+        "smoothquant" => QuantizationMethod::SmoothQuant,
+        "bitnet" => QuantizationMethod::BitNet,
+        "int4" => QuantizationMethod::INT4,
+        "int8" => QuantizationMethod::INT8,
+        _ => QuantizationMethod::SpinQuant,
+    }
 }
+
+fn main() -> anyhow::Result<()> {
+    tracing_subscriber::fmt().with_env_filter("info").init();
+    let cli = Cli::parse();
+
+    match cli.command {
+        Commands::Quantize { model, method, weight_bits, activation_bits, group_size, per_channel } => {
+            let method = parse_method(&method);
+            let config = QuantizationConfig {
+                method,
+                weight_bits,
+                activation_bits,
+                group_size,
+                use_symmetric: true,
+                per_channel,
+                calibration_samples: 512,
+            };
+
+            // Remote-aware fetch → local path or special handle
+            let source = parse_model_source(&model);
+            let fetched = ModelFetcher::fetch(&source).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+
+            let mut loader = UniversalLoader::new();
+            let model = loader
+                .load_model(&fetched.local_path)
+                .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+            let mut quantizer = Quantizer::new(config);
+            let result = quantizer
+                .quantize_model(&model)
+                .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+            println!("Quantized {}: {:.1}x compression", result.metadata.original_model, result.metadata.compression_ratio);
+        }
+        Commands::Verify { original, quantized } => {
+            let engine = VerificationEngine::new(VerificationConfig::default());
+            let report = futures::executor::block_on(engine.verify_model(&original, &quantized))
+                .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+            println!("{}", engine.generate_report_string(&report));
+        }
+        Commands::Info {} => {
+            println!("APQ CLI - available methods: SpinQuant, TernaryLLMDLT, VPTQ, DuQuant, HyperTernary, AdaptiveBits, ZeroShot, NeuralQuant, GPTQ, AWQ, SmoothQuant, BitNet, INT4, INT8");
+        }
+    }
+
+    Ok(())
+}
+

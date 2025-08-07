@@ -5,7 +5,7 @@ edition = "2021"
 authors = ["Dedan Okware <softengdedan@gmail.com>"]
 description = "Revolutionary Super-APQ: Zero-Cost Universal LLM Quantization Engine"
 license = "MIT"
-repository = "https://github.com/ohms-project/ohms-adaptq"
+repository = "https://github.com/OHMS-DeAI/ohms-adaptq"
 homepage = "https://ohms-project.org"
 keywords = ["llm", "quantization", "icp", "blockchain", "ai"]
 categories = ["compression", "science", "algorithms"]
@@ -13,10 +13,6 @@ categories = ["compression", "science", "algorithms"]
 [[bin]]
 name = "apq"
 path = "src/bin/apq.rs"
-
-[[bin]]
-name = "super-apq"
-path = "src/bin/super_apq.rs"
 
 [dependencies]
 # Core dependencies
@@ -30,25 +26,54 @@ thiserror = "1.0"
 sha2 = "0.10"
 hex = "0.4"
 
-# Quantization and ML
+# High-performance quantization and ML
 candle-core = "0.9"
 candle-nn = "0.9"
 candle-transformers = "0.9"
 safetensors = "0.6"
+ndarray = { version = "0.16", features = ["rayon", "serde"] }
+nalgebra = { version = "0.33", features = ["serde-serialize"] }
+
+# Advanced numerical computation
+faer = { version = "0.19", optional = true }
+blas-src = { version = "0.10", features = ["openblas"], optional = true }
+openblas-src = { version = "0.10", features = ["cblas", "system"], optional = true }
 
 # HuggingFace integration
 hf-hub = "0.4"
 tokenizers = "0.21"
 
+# Hardware acceleration and SIMD
+wide = "0.7"  # SIMD operations
+rayon = "1.8"  # Parallel processing
+num-traits = "0.2"
+half = { version = "2.4", features = ["serde", "num-traits"] }
+
 # File I/O and compression
 tar = "0.4"
 flate2 = "1.0"
 memmap2 = "0.9"
+bincode = "1.3"
+zstd = "0.13"  # Better compression
+
+# Network
+reqwest = { version = "0.11", features = ["blocking", "json"] }
+futures = "0.3"
+tempfile = "3.10"
 
 # Progress and logging
 indicatif = "0.17"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Statistical and optimization
+statrs = "0.17"  # Statistical functions
+argmin = "0.10"  # Optimization algorithms
+smartcore = "0.3"  # Machine learning algorithms
+
+# Additional dependencies for world-class quantization
+rand = "0.8"  # Random number generation for NAS
+num_cpus = "1.16"  # CPU core detection
 
 [dev-dependencies]
 tempfile = "3.0"
@@ -56,6 +81,8 @@ assert_approx_eq = "1.1"
 
 [features]
 default = []
+simd = []
+blas = ["faer", "blas-src", "openblas-src"]
 
 [profile.release]
 lto = true
