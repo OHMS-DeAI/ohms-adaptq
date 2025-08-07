@@ -22,6 +22,9 @@ enum Commands {
         #[arg(long, default_value_t = 4)] activation_bits: u8,
         #[arg(long, default_value_t = 128)] group_size: usize,
         #[arg(long, default_value_t = true)] per_channel: bool,
+        #[arg(long, value_name = "N", help = "Override CPU threads (default: all cores)")] threads: Option<usize>,
+        #[arg(long, value_name = "speed|balanced|quality", help = "Preset that overrides method/bits/calibration for speed or quality")] preset: Option<String>,
+        #[arg(long, default_value_t = false, help = "Reduce RAM usage (bigger groups, fewer samples)")] low_mem: bool,
     },
     Verify {
         #[arg(long)] original: String,
@@ -70,14 +73,17 @@ fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Quantize { model, method, weight_bits, activation_bits, group_size, per_channel } => {
+        Commands::Quantize { model, method, weight_bits, activation_bits, group_size, per_channel, threads, preset, low_mem } => {
             let banner = format!("{} {}", Purple.bold().paint("Ω"), White.bold().paint("APQ Quantize"));
             eprintln!("{}", banner);
             let stage = ProgressBar::new_spinner();
             stage.set_style(ProgressStyle::with_template("{spinner} {msg}").unwrap());
             stage.enable_steady_tick(std::time::Duration::from_millis(80));
             stage.set_message("Fetching model...");
-            let method = parse_method(&method);
+            if let Some(n) = threads {
+                let _ = rayon::ThreadPoolBuilder::new().num_threads(n).build_global();
+            }
+            let mut method = parse_method(&method);
             let config = QuantizationConfig {
                 method,
                 weight_bits,
@@ -87,6 +93,34 @@ fn main() -> anyhow::Result<()> {
                 per_channel,
                 calibration_samples: 512,
             };
+            let mut config = config;
+            if let Some(p) = preset.as_deref() {
+                match p {
+                    "speed" => {
+                        method = QuantizationMethod::INT8;
+                        config.method = method;
+                        config.weight_bits = 8.0;
+                        config.activation_bits = 8;
+                        config.group_size = 256;
+                        config.per_channel = false;
+                        config.calibration_samples = 0;
+                    }
+                    "balanced" => {
+                        config.group_size = 256;
+                        config.calibration_samples = 128;
+                    }
+                    "quality" => {
+                        // keep provided settings, but more samples
+                        config.calibration_samples = 1024;
+                    }
+                    _ => {}
+                }
+            }
+            if low_mem {
+                config.group_size = config.group_size.max(256);
+                config.per_channel = false;
+                if config.calibration_samples > 128 { config.calibration_samples = 128; }
+            }
 
             // Remote-aware fetch → local path or special handle
             let source = parse_model_source(&model);
