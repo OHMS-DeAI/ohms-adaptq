@@ -3,7 +3,9 @@ use anyhow::Context;
 use reqwest::blocking::Client;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT, ACCEPT};
 use std::time::Duration;
-use std::io::Write;
+use std::io::{Write, Read};
+use indicatif::{ProgressBar, ProgressStyle};
+use nu_ansi_term::Color::{White, Purple};
 
 #[derive(Debug, Clone)]
 pub enum ModelSource {
@@ -45,7 +47,27 @@ fn fetch_via_http(url: &str, filename: Option<&str>) -> anyhow::Result<FetchResu
     let name = filename.map(|s| s.to_string()).unwrap_or_else(|| infer_filename_from_url(url));
     let path = std::env::temp_dir().join(name);
     let mut file = std::fs::File::create(&path)?;
-    std::io::copy(&mut resp, &mut file)?;
+
+    let total = resp.content_length().unwrap_or(0);
+    let bar = ProgressBar::new(total);
+    bar.set_style(
+        ProgressStyle::with_template("{prefix:.bold} {bar:40.cyan/blue} {bytes}/{total_bytes} ({bytes_per_sec}, {eta})")
+            .unwrap()
+            .progress_chars("##-"),
+    );
+    bar.set_prefix(format!("{} {}",
+        White.bold().paint("Downloading"),
+        Purple.bold().paint("OHMS"),
+    ));
+
+    let mut buf = [0u8; 1 << 16];
+    loop {
+        let n = resp.read(&mut buf)?;
+        if n == 0 { break; }
+        file.write_all(&buf[..n])?;
+        bar.inc(n as u64);
+    }
+    bar.finish_and_clear();
     file.flush()?;
     Ok(FetchResult { local_path: path })
 }
@@ -69,7 +91,27 @@ fn fetch_via_http_with_auth(url: &str, filename: &str, token: Option<String>) ->
     anyhow::ensure!(resp.status().is_success(), "download failed: {}", resp.status());
     let path = std::env::temp_dir().join(filename);
     let mut file = std::fs::File::create(&path)?;
-    std::io::copy(&mut resp, &mut file)?;
+
+    let total = resp.content_length().unwrap_or(0);
+    let bar = ProgressBar::new(total);
+    bar.set_style(
+        ProgressStyle::with_template("{prefix:.bold} {bar:40.cyan/blue} {bytes}/{total_bytes} ({bytes_per_sec}, {eta})")
+            .unwrap()
+            .progress_chars("##-"),
+    );
+    bar.set_prefix(format!("{} {}",
+        White.bold().paint("Downloading"),
+        Purple.bold().paint("OHMS"),
+    ));
+
+    let mut buf = [0u8; 1 << 16];
+    loop {
+        let n = resp.read(&mut buf)?;
+        if n == 0 { break; }
+        file.write_all(&buf[..n])?;
+        bar.inc(n as u64);
+    }
+    bar.finish_and_clear();
     file.flush()?;
     Ok(FetchResult { local_path: path })
 }

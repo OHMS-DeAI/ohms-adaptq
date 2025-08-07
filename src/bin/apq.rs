@@ -1,11 +1,13 @@
 use clap::{Parser, Subcommand};
+use indicatif::{ProgressBar, ProgressStyle};
+use nu_ansi_term::Color::{Purple, White};
 use ohms_adaptq::{
     VerificationConfig, VerificationEngine, Quantizer, QuantizationConfig, QuantizationMethod,
     UniversalLoader, ModelFetcher, parse_model_source,
 };
 
 #[derive(Parser)]
-#[command(name = "apq", version, about = "OHMS Adaptive Quantization - Production CLI", long_about = None)]
+#[command(name = "apq", version, about = "OHMS Adaptive Quantization - APQ CLI", long_about = None)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -57,6 +59,12 @@ fn main() -> anyhow::Result<()> {
 
     match cli.command {
         Commands::Quantize { model, method, weight_bits, activation_bits, group_size, per_channel } => {
+            let banner = format!("{} {}", Purple.bold().paint("Ω"), White.bold().paint("APQ Quantize"));
+            eprintln!("{}", banner);
+            let stage = ProgressBar::new_spinner();
+            stage.set_style(ProgressStyle::with_template("{spinner} {msg}").unwrap());
+            stage.enable_steady_tick(std::time::Duration::from_millis(80));
+            stage.set_message("Fetching model...");
             let method = parse_method(&method);
             let config = QuantizationConfig {
                 method,
@@ -71,25 +79,42 @@ fn main() -> anyhow::Result<()> {
             // Remote-aware fetch → local path or special handle
             let source = parse_model_source(&model);
             let fetched = ModelFetcher::fetch(&source).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+            stage.set_message("Loading model...");
 
             let mut loader = UniversalLoader::new();
             let model = loader
                 .load_model(&fetched.local_path)
                 .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+            stage.set_message("Quantizing...");
             let mut quantizer = Quantizer::new(config);
             let result = quantizer
                 .quantize_model(&model)
                 .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-            println!("Quantized {}: {:.1}x compression", result.metadata.original_model, result.metadata.compression_ratio);
+            stage.finish_and_clear();
+            println!(
+                "{} {}: {:.1}x compression",
+                Purple.bold().paint("Ω"),
+                result.metadata.original_model,
+                result.metadata.compression_ratio
+            );
         }
         Commands::Verify { original, quantized } => {
+            let banner = format!("{} {}", Purple.bold().paint("Ω"), White.bold().paint("APQ Verify"));
+            eprintln!("{}", banner);
+            let stage = ProgressBar::new_spinner();
+            stage.set_style(ProgressStyle::with_template("{spinner} {msg}").unwrap());
+            stage.enable_steady_tick(std::time::Duration::from_millis(80));
+            stage.set_message("Running verification...");
             let engine = VerificationEngine::new(VerificationConfig::default());
             let report = futures::executor::block_on(engine.verify_model(&original, &quantized))
                 .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+            stage.finish_and_clear();
             println!("{}", engine.generate_report_string(&report));
         }
         Commands::Info { model } => {
             if let Some(model) = model {
+                let banner = format!("{} {}", Purple.bold().paint("Ω"), White.bold().paint("APQ Info"));
+                eprintln!("{}", banner);
                 let source = parse_model_source(&model);
                 let fetched = ModelFetcher::fetch(&source).map_err(|e| anyhow::anyhow!(e.to_string()))?;
                 let mut loader = UniversalLoader::new();
