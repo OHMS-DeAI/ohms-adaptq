@@ -1,5 +1,9 @@
 use std::{fs, path::PathBuf};
 use anyhow::Context;
+use reqwest::blocking::Client;
+use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT, ACCEPT};
+use std::time::Duration;
+use std::io::Write;
 
 #[derive(Debug, Clone)]
 pub enum ModelSource {
@@ -28,21 +32,72 @@ impl ModelFetcher {
 }
 
 fn fetch_via_http(url: &str, filename: Option<&str>) -> anyhow::Result<FetchResult> {
-    let resp = reqwest::blocking::get(url).with_context(|| format!("GET {} failed", url))?;
+    let client = Client::builder()
+        .timeout(Duration::from_secs(900))
+        .build()?;
+    let mut resp = client
+        .get(url)
+        .header(USER_AGENT, HeaderValue::from_static("ohms-adaptq/0.9"))
+        .header(ACCEPT, HeaderValue::from_static("application/octet-stream"))
+        .send()
+        .with_context(|| format!("GET {} failed", url))?;
     anyhow::ensure!(resp.status().is_success(), "download failed: {}", resp.status());
-    let bytes = resp.bytes()?;
     let name = filename.map(|s| s.to_string()).unwrap_or_else(|| infer_filename_from_url(url));
     let path = std::env::temp_dir().join(name);
-    fs::write(&path, &bytes)?;
+    let mut file = std::fs::File::create(&path)?;
+    std::io::copy(&mut resp, &mut file)?;
+    file.flush()?;
+    Ok(FetchResult { local_path: path })
+}
+
+fn fetch_via_http_with_auth(url: &str, filename: &str, token: Option<String>) -> anyhow::Result<FetchResult> {
+    let client = Client::builder()
+        .timeout(Duration::from_secs(900))
+        .build()?;
+    let mut headers = HeaderMap::new();
+    headers.insert(USER_AGENT, HeaderValue::from_static("ohms-adaptq/0.9"));
+    headers.insert(ACCEPT, HeaderValue::from_static("application/octet-stream"));
+    if let Some(t) = token {
+        let hv = HeaderValue::from_str(&format!("Bearer {}", t)).unwrap_or(HeaderValue::from_static(""));
+        headers.insert(AUTHORIZATION, hv);
+    }
+    let mut resp = client
+        .get(url)
+        .headers(headers)
+        .send()
+        .with_context(|| format!("GET {} failed", url))?;
+    anyhow::ensure!(resp.status().is_success(), "download failed: {}", resp.status());
+    let path = std::env::temp_dir().join(filename);
+    let mut file = std::fs::File::create(&path)?;
+    std::io::copy(&mut resp, &mut file)?;
+    file.flush()?;
     Ok(FetchResult { local_path: path })
 }
 
 fn fetch_hf(repo: &str, file: Option<&str>) -> anyhow::Result<FetchResult> {
-    // Use HuggingFace hub raw URLs for direct file fetch to avoid adding heavy deps.
-    // e.g., https://huggingface.co/<repo>/resolve/main/<file>
-    let target_file = file.unwrap_or("model.safetensors");
-    let url = format!("https://huggingface.co/{}/resolve/main/{}", repo, target_file);
-    fetch_via_http(&url, Some(target_file))
+    // Use lightweight HTTP with auth headers and try common filenames if none provided
+    let token = std::env::var("HF_TOKEN").ok().or_else(|| std::env::var("HUGGINGFACE_HUB_TOKEN").ok());
+    let try_files: Vec<String> = if let Some(f) = file { vec![f.to_string()] } else { vec![
+        "model.safetensors".into(),
+        "consolidated.safetensors".into(),
+        "pytorch_model.bin".into(),
+        // common first shards for sharded repos
+        "model-00001-of-00001.safetensors".into(),
+        "pytorch_model-00001-of-00001.bin".into(),
+        "model-00001-of-000xx.safetensors".into(),
+        "pytorch_model-00001-of-000xx.bin".into(),
+    ]};
+
+    let base = format!("https://huggingface.co/{}/resolve/main/", repo);
+    let mut last_err: Option<anyhow::Error> = None;
+    for fname in try_files {
+        let url = format!("{}{}", &base, &fname);
+        match fetch_via_http_with_auth(&url, &fname, token.clone()) {
+            Ok(r) => return Ok(r),
+            Err(e) => { last_err = Some(e); }
+        }
+    }
+    Err(last_err.unwrap_or_else(|| anyhow::anyhow!("no compatible weight file found in repo '{}'; specify :<file>", repo)))
 }
 
 fn fetch_ollama(model: &str) -> anyhow::Result<FetchResult> {

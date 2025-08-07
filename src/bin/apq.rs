@@ -25,7 +25,10 @@ enum Commands {
         #[arg(long)] original: String,
         #[arg(long)] quantized: String,
     },
-    Info {},
+    Info {
+        #[arg(long, help = "Model source: hf:<repo>[:file] | url:<http(s)://...> | ollama:<name> | file:/abs/path | /abs/path")] 
+        model: Option<String>,
+    },
 }
 
 fn parse_method(name: &str) -> QuantizationMethod {
@@ -85,8 +88,31 @@ fn main() -> anyhow::Result<()> {
                 .map_err(|e| anyhow::anyhow!(e.to_string()))?;
             println!("{}", engine.generate_report_string(&report));
         }
-        Commands::Info {} => {
-            println!("APQ CLI - available methods: SpinQuant, TernaryLLMDLT, VPTQ, DuQuant, HyperTernary, AdaptiveBits, ZeroShot, NeuralQuant, GPTQ, AWQ, SmoothQuant, BitNet, INT4, INT8");
+        Commands::Info { model } => {
+            if let Some(model) = model {
+                let source = parse_model_source(&model);
+                let fetched = ModelFetcher::fetch(&source).map_err(|e| anyhow::anyhow!(e.to_string()))?;
+                let mut loader = UniversalLoader::new();
+                let m = loader
+                    .load_model(&fetched.local_path)
+                    .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+                let total_params: u64 = m.layers.iter().map(|l| l.parameters).sum();
+                println!(
+                    "Model: {}\nFormat: {:?}\nArch: {}\nLayers: {}\nParams (sum): {}\nHidden size: {}\nHeads: {}\nContext length: {}\nPrecision: {:?}",
+                    m.metadata.name,
+                    m.format,
+                    m.metadata.architecture,
+                    m.layers.len(),
+                    total_params,
+                    m.metadata.hidden_size,
+                    m.metadata.num_heads,
+                    m.metadata.context_length,
+                    m.metadata.precision
+                );
+            } else {
+                println!("APQ CLI - available methods: SpinQuant, TernaryLLMDLT, VPTQ, DuQuant, HyperTernary, AdaptiveBits, ZeroShot, NeuralQuant, GPTQ, AWQ, SmoothQuant, BitNet, INT4, INT8");
+                println!("\nUsage: apq info --model <hf:repo[:file]|url:...|ollama:name|file:/abs/path|/abs/path>");
+            }
         }
     }
 
