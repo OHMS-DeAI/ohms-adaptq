@@ -1,4 +1,5 @@
 use std::{fs, path::PathBuf};
+use std::process::Command;
 use anyhow::Context;
 use reqwest::blocking::Client;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT, ACCEPT};
@@ -117,6 +118,11 @@ fn fetch_via_http_with_auth(url: &str, filename: &str, token: Option<String>) ->
 }
 
 fn fetch_hf(repo: &str, file: Option<&str>) -> anyhow::Result<FetchResult> {
+    // Prefer huggingface-cli with hf_transfer if present; fall back to HTTP
+    if let Some(res) = try_hf_cli_download(repo, file)? {
+        return Ok(FetchResult { local_path: res });
+    }
+
     // Use lightweight HTTP with auth headers and try common filenames if none provided
     let token = std::env::var("HF_TOKEN").ok().or_else(|| std::env::var("HUGGINGFACE_HUB_TOKEN").ok());
     let try_files: Vec<String> = if let Some(f) = file { vec![f.to_string()] } else { vec![
@@ -140,6 +146,48 @@ fn fetch_hf(repo: &str, file: Option<&str>) -> anyhow::Result<FetchResult> {
         }
     }
     Err(last_err.unwrap_or_else(|| anyhow::anyhow!("no compatible weight file found in repo '{}'; specify :<file>", repo)))
+}
+
+fn try_hf_cli_download(repo: &str, file: Option<&str>) -> anyhow::Result<Option<PathBuf>> {
+    // Check if huggingface-cli exists
+    let which = Command::new("bash").arg("-lc").arg("command -v huggingface-cli").output()?;
+    if which.status.code().unwrap_or(1) != 0 { return Ok(None); }
+
+    let tmp = std::env::temp_dir().join(format!("apq-hf-{}", repo.replace('/', "_")));
+    let _ = std::fs::create_dir_all(&tmp);
+
+    // Build args
+    let mut args: Vec<String> = vec![
+        "download".into(),
+        repo.into(),
+        "--local-dir".into(), tmp.to_string_lossy().to_string(),
+        "--resume-download".into(),
+    ];
+    if let Some(f) = file { args.push("--include".into()); args.push(f.into()); }
+    else {
+        args.push("--include".into()); args.push("model.safetensors".into());
+        args.push("--include".into()); args.push("consolidated.safetensors".into());
+        args.push("--include".into()); args.push("pytorch_model.bin".into());
+    }
+
+    let mut cmd = Command::new("huggingface-cli");
+    cmd.args(&args);
+    // Enable accelerated transfer if available
+    cmd.env("HF_HUB_ENABLE_HF_TRANSFER", "1");
+    if let Ok(tok) = std::env::var("HF_TOKEN") { cmd.env("HF_TOKEN", tok); }
+    let status = cmd.status()?;
+    if !status.success() { return Ok(None); }
+
+    // Resolve target file path
+    if let Some(f) = file { 
+        let p = tmp.join(f);
+        if p.exists() { return Ok(Some(p)); }
+    }
+    for cand in ["model.safetensors", "consolidated.safetensors", "pytorch_model.bin"] {
+        let p = tmp.join(cand);
+        if p.exists() { return Ok(Some(p)); }
+    }
+    Ok(None)
 }
 
 fn fetch_ollama(model: &str) -> anyhow::Result<FetchResult> {

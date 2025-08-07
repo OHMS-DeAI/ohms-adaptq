@@ -31,6 +31,18 @@ enum Commands {
         #[arg(long, help = "Model source: hf:<repo>[:file] | url:<http(s)://...> | ollama:<name> | file:/abs/path | /abs/path")] 
         model: Option<String>,
     },
+    Net {
+        #[command(subcommand)]
+        command: NetCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum NetCmd {
+    /// Boost bandwidth for APQ downloads (Linux: requires sudo). Best-effort.
+    Boost { #[arg(long)] device: Option<String> },
+    /// Reset traffic shaping rules applied by Boost
+    Reset { #[arg(long)] device: Option<String> },
 }
 
 fn parse_method(name: &str) -> QuantizationMethod {
@@ -139,8 +151,44 @@ fn main() -> anyhow::Result<()> {
                 println!("\nUsage: apq info --model <hf:repo[:file]|url:...|ollama:name|file:/abs/path|/abs/path>");
             }
         }
+        Commands::Net { command } => {
+            match command {
+                NetCmd::Boost { device } => {
+                    let dev = device.or_else(detect_default_iface).unwrap_or_else(|| "eth0".into());
+                    eprintln!("{} Boosting download priority on {} (requires sudo)…", Purple.bold().paint("Ω"), dev);
+                    // Best-effort; ignore failures
+                    let _ = run("sudo", &["tc", "qdisc", "add", "dev", &dev, "root", "handle", "1:", "htb", "default", "20"]);
+                    let _ = run("sudo", &["tc", "class", "add", "dev", &dev, "parent", "1:", "classid", "1:10", "htb", "rate", "1000mbit", "prio", "0"]);
+                    let _ = run("sudo", &["tc", "class", "add", "dev", &dev, "parent", "1:", "classid", "1:20", "htb", "rate", "10mbit", "ceil", "1000mbit", "prio", "7"]);
+                    let _ = run("sudo", &["iptables", "-t", "mangle", "-A", "OUTPUT", "-p", "tcp", "--dport", "443", "-j", "MARK", "--set-mark", "10"]);
+                    let _ = run("sudo", &["tc", "filter", "add", "dev", &dev, "parent", "1:", "protocol", "ip", "handle", "10", "fw", "flowid", "1:10"]);
+                    println!("{} Bandwidth boost active on {}. Run: apq net reset --device {} to undo.", White.bold().paint("OK"), dev, dev);
+                }
+                NetCmd::Reset { device } => {
+                    let dev = device.or_else(detect_default_iface).unwrap_or_else(|| "eth0".into());
+                    let _ = run("sudo", &["tc", "qdisc", "del", "dev", &dev, "root"]);
+                    let _ = run("sudo", &["iptables", "-t", "mangle", "-F"]);
+                    println!("{} Traffic shaping cleared on {}.", White.bold().paint("OK"), dev);
+                }
+            }
+        }
     }
 
     Ok(())
+}
+
+fn run(cmd: &str, args: &[&str]) -> std::io::Result<std::process::ExitStatus> {
+    std::process::Command::new(cmd).args(args).status()
+}
+
+fn detect_default_iface() -> Option<String> {
+    let out = std::process::Command::new("bash")
+        .arg("-lc")
+        .arg("ip -br route get 8.8.8.8 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i==\"dev\") {print $(i+1); exit}}'")
+        .output()
+        .ok()?;
+    if !out.status.success() { return None; }
+    let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if s.is_empty() { None } else { Some(s) }
 }
 
