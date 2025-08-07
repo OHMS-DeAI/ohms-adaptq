@@ -2,6 +2,11 @@
 
 Production-ready CLI and library for quantizing LLMs with verification.
 
+## What's new
+- Progressive download and per-layer quantization progress with speed/ETA
+- Network boost helpers: `apq net boost/reset`
+- Presets and low-memory mode for fast CPU quantization
+
 ## Remote model sources (no local download required)
 
 Use `--model` with one of:
@@ -14,6 +19,33 @@ Use `--model` with one of:
 - Local file: `file:/abs/path/model.safetensors` or `/abs/path/model.onnx`
 
 ## CLI
+### Speed/Memory controls
+- `--threads N`: set CPU threads
+- `--preset speed|balanced|quality`
+- `--low-mem`: reduce RAM usage (bigger groups, fewer samples)
+
+Examples (CPU-friendly for >2 GiB models):
+```
+apq quantize \
+  --model "hf:TinyLlama/TinyLlama-1.1B-Chat-v1.0:model.safetensors" \
+  --method SpinQuant \
+  --preset balanced \
+  --threads 2 \
+  --low-mem
+```
+
+### Bandwidth boost (Linux)
+```
+apq net boost            # prioritize APQ downloads
+apq net reset            # undo
+```
+
+Tip: accelerate Hugging Face transfers
+```
+pip install -U huggingface_hub hf_transfer
+export HF_HUB_ENABLE_HF_TRANSFER=1
+# export HF_TOKEN=xxxx        # if private
+```
 
 Quantize:
 

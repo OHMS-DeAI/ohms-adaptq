@@ -6,6 +6,7 @@ use std::fs::File;
 use std::io::{Write, BufWriter};
 use serde::{Serialize, Deserialize};
 use rayon::prelude::*;
+use indicatif::{ProgressBar, ProgressStyle};
 
 /// Quantized model output format
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -132,15 +133,26 @@ impl Quantizer {
         // Calculate original size
         let original_size = self.calculate_model_size(model);
         
-        // Quantize layers
+        // Quantize layers with progressive per-layer timer
         let mut quantized_layers = Vec::new();
         let total_layers = model.layers.len();
+        let pb = ProgressBar::new(total_layers as u64);
+        pb.set_style(
+            ProgressStyle::with_template("{spinner:.bold} {bar:40.cyan/blue} {pos}/{len} {msg}  (eta {eta})")
+                .unwrap()
+                .progress_chars("##-"),
+        );
         
         for (idx, layer) in model.layers.iter().enumerate() {
-            println!("Quantizing layer {}/{}: {}", idx + 1, total_layers, layer.name);
+            let layer_start = std::time::Instant::now();
+            pb.set_message(format!("layer {}: {}", idx + 1, layer.name));
             let quantized = self.quantize_layer(layer)?;
             quantized_layers.push(quantized);
+            let elapsed = layer_start.elapsed();
+            pb.inc(1);
+            pb.set_message(format!("layer {} done in {:.1?}", idx + 1, elapsed));
         }
+        pb.finish_and_clear();
         
         // Calculate quantized size
         let quantized_size = self.calculate_quantized_size(&quantized_layers);
