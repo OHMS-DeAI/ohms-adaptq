@@ -1,10 +1,12 @@
 pub mod quantization;
 pub mod manifest;
 pub mod verification;
+pub mod super_apq;
 
 pub use quantization::*;
 pub use manifest::*;
 pub use verification::*;
+pub use super_apq::{SuperAPQ, SuperAPQConfig, SuperQuantizedModel};
 
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 

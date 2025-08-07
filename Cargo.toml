@@ -1,15 +1,22 @@
 [package]
 name = "ohms-adaptq"
-version = "1.0.0"
+version = "2.0.0"
 edition = "2021"
-description = "Adaptive Progressive Quantization engine for OHMS"
+authors = ["Dedan Okware <softengdedan@gmail.com>"]
+description = "Revolutionary Super-APQ: Zero-Cost Universal LLM Quantization Engine"
 license = "MIT"
 repository = "https://github.com/ohms-project/ohms-adaptq"
 homepage = "https://ohms-project.org"
+keywords = ["llm", "quantization", "icp", "blockchain", "ai"]
+categories = ["compression", "science", "algorithms"]
 
 [[bin]]
 name = "apq"
 path = "src/bin/apq.rs"
+
+[[bin]]
+name = "super-apq"
+path = "src/bin/super_apq.rs"
 
 [dependencies]
 # Core dependencies
@@ -36,6 +43,7 @@ tokenizers = "0.15"
 # File I/O and compression
 tar = "0.4"
 flate2 = "1.0"
+memmap2 = "0.9"
 
 # Progress and logging
 indicatif = "0.17"
@@ -47,8 +55,9 @@ tempfile = "3.0"
 assert_approx_eq = "1.1"
 
 [features]
-default = ["cli"]
-cli = ["clap", "indicatif", "tracing-subscriber"]
+default = []
+
+[workspace]
 
 [profile.release]
 lto = true
