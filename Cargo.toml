@@ -1,6 +1,6 @@
 [package]
 name = "ohms-adaptq"
-version = "0.9.5"
+version = "0.9.6"
 edition = "2021"
 authors = ["Dedan Okware <softengdedan@gmail.com>"]
 description = "Revolutionary Super-APQ: Zero-Cost Universal LLM Quantization Engine"
@@ -21,6 +21,10 @@ serde_json = "1.0"
 clap = { version = "4.0", features = ["derive"] }
 anyhow = "1.0"
 thiserror = "1.0"
+candid = "0.10"
+ic-agent = "0.36"
+tokio = { version = "1.38", features = ["rt-multi-thread", "macros"] }
+base64 = "0.22"
 
 # Cryptography
 sha2 = "0.10"

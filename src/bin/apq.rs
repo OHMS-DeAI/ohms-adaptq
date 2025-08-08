@@ -5,6 +5,8 @@ use ohms_adaptq::{
     VerificationConfig, VerificationEngine, Quantizer, QuantizationConfig, QuantizationMethod,
     UniversalLoader, ModelFetcher, parse_model_source,
 };
+use candid::Encode;
+use std::str::FromStr;
 
 #[derive(Parser)]
 #[command(name = "apq", version, about = "OHMS Adaptive Quantization - APQ CLI", long_about = None)]
@@ -25,6 +27,7 @@ enum Commands {
         #[arg(long, value_name = "N", help = "Override CPU threads (default: all cores)")] threads: Option<usize>,
         #[arg(long, value_name = "speed|balanced|quality", help = "Preset that overrides method/bits/calibration for speed or quality")] preset: Option<String>,
         #[arg(long, default_value_t = false, help = "Reduce RAM usage (bigger groups, fewer samples)")] low_mem: bool,
+        #[arg(long, help = "Optional path to save SAPQ artifact (binary)")] out: Option<String>,
     },
     Verify {
         #[arg(long)] original: String,
@@ -37,6 +40,19 @@ enum Commands {
     Net {
         #[command(subcommand)]
         command: NetCmd,
+    },
+    Pack {
+        #[arg(long, help = "Input SAPQ artifact path (from --out in quantize)")] input: String,
+        #[arg(long, help = "Output JSON artifact path for ohms-model publish")] out: String,
+        #[arg(long, help = "Override architecture family (default: original_model)")] family: Option<String>,
+    },
+    Publish {
+        #[arg(long, help = "Canister ID (principal text)")] canister: String,
+        #[arg(long, help = "DFX identity to use (optional)")] identity: Option<String>,
+        #[arg(long, help = "Network URL, e.g., https://ic0.app (default: local agent)")] network: Option<String>,
+        #[arg(long, help = "Model ID to store under")] model_id: String,
+        #[arg(long, help = "Source model descriptor (e.g., hf:repo:file or note)")] source_model: String,
+        #[arg(long, help = "Path to serialized Super-APQ JSON artifact (with fields architecture, compressed_model, verification)")] artifact: String,
     },
 }
 
@@ -73,7 +89,7 @@ fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Quantize { model, method, weight_bits, activation_bits, group_size, per_channel, threads, preset, low_mem } => {
+        Commands::Quantize { model, method, weight_bits, activation_bits, group_size, per_channel, threads, preset, low_mem, out } => {
             let banner = format!("{} {}", Purple.bold().paint("Ω"), White.bold().paint("APQ Quantize"));
             eprintln!("{}", banner);
             let stage = ProgressBar::new_spinner();
@@ -143,6 +159,62 @@ fn main() -> anyhow::Result<()> {
                 result.metadata.original_model,
                 result.metadata.compression_ratio
             );
+            if let Some(path) = out {
+                use std::path::Path;
+                quantizer
+                    .save_quantized_model(&result, Path::new(&path))
+                    .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+                println!("{} Saved SAPQ artifact to {}", White.bold().paint("OK"), path);
+            }
+        }
+        Commands::Pack { input, out, family } => {
+            use std::path::Path;
+            let banner = format!("{} {}", Purple.bold().paint("Ω"), White.bold().paint("APQ Pack"));
+            eprintln!("{}", banner);
+            let data = std::fs::read(&input)?;
+            // Load quantized model for metadata
+            let qm = ohms_adaptq::quantizer::Quantizer::load_quantized_model(Path::new(&input))
+                .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+            // Derive architecture fields
+            let arch_family = family.unwrap_or_else(|| qm.metadata.original_model.clone());
+            let layers = qm.layers.len() as u32;
+            // Try estimate hidden size from first weight tensor shape second dim
+            let hidden_size: u32 = qm.layers.iter()
+                .flat_map(|l| l.weights.iter())
+                .filter_map(|t| t.shape.get(1).copied())
+                .next()
+                .unwrap_or(0) as u32;
+
+            #[derive(serde::Serialize)]
+            struct ArchitectureSerde { family: String, layers: u32, hidden_size: u32 }
+            #[derive(serde::Serialize)]
+            struct CompressedMetaSerde { compression_ratio: f32, original_size: u64, compressed_size: u64 }
+            #[derive(serde::Serialize)]
+            struct CompressedModelSerde { data: String, metadata: CompressedMetaSerde }
+            #[derive(serde::Serialize)]
+            struct VerificationSerde { bit_accuracy: f32 }
+            #[derive(serde::Serialize)]
+            struct SuperQuantizedModelSerde {
+                architecture: ArchitectureSerde,
+                compressed_model: CompressedModelSerde,
+                verification: VerificationSerde,
+            }
+
+            let artifact = SuperQuantizedModelSerde {
+                architecture: ArchitectureSerde { family: arch_family, layers, hidden_size },
+                compressed_model: CompressedModelSerde {
+                    data: base64::encode(&data),
+                    metadata: CompressedMetaSerde {
+                        compression_ratio: qm.metadata.compression_ratio,
+                        original_size: qm.metadata.original_size_bytes,
+                        compressed_size: qm.metadata.quantized_size_bytes,
+                    }
+                },
+                verification: VerificationSerde { bit_accuracy: qm.verification.accuracy_retention },
+            };
+            let json = serde_json::to_string_pretty(&artifact)?;
+            std::fs::write(&out, json)?;
+            println!("{} Wrote JSON artifact to {}", White.bold().paint("OK"), out);
         }
         Commands::Verify { original, quantized } => {
             let banner = format!("{} {}", Purple.bold().paint("Ω"), White.bold().paint("APQ Verify"));
@@ -203,6 +275,97 @@ fn main() -> anyhow::Result<()> {
                     let _ = run("sudo", &["tc", "qdisc", "del", "dev", &dev, "root"]);
                     let _ = run("sudo", &["iptables", "-t", "mangle", "-F"]);
                     println!("{} Traffic shaping cleared on {}.", White.bold().paint("OK"), dev);
+                }
+            }
+        },
+        Commands::Publish { canister, identity: _identity, network, model_id, source_model, artifact } => {
+            let banner = format!("{} {}", Purple.bold().paint("Ω"), White.bold().paint("APQ Publish"));
+            eprintln!("{}", banner);
+            let data = std::fs::read_to_string(&artifact)?;
+            #[derive(serde::Deserialize)]
+            struct SuperQuantizedModelSerde {
+                architecture: ArchitectureSerde,
+                compressed_model: CompressedModelSerde,
+                verification: VerificationSerde,
+            }
+            #[derive(serde::Deserialize)]
+            struct ArchitectureSerde { family: String, layers: u32, hidden_size: u32 }
+            #[derive(serde::Deserialize)]
+            struct CompressedModelSerde { data: String, metadata: CompressedMetaSerde }
+            #[derive(serde::Deserialize)]
+            struct CompressedMetaSerde { compression_ratio: f32, original_size: u64, compressed_size: u64 }
+            #[derive(serde::Deserialize)]
+            struct VerificationSerde { bit_accuracy: f32 }
+
+            let parsed: SuperQuantizedModelSerde = serde_json::from_str(&data)?;
+            // Expect base64 for data string; accept hex as fallback
+            let bytes = if let Ok(b) = base64::decode(&parsed.compressed_model.data) { b } else { hex::decode(&parsed.compressed_model.data)? };
+
+            // Recreate ohms-model's domain types inline for candid encoding
+            #[derive(candid::CandidType, serde::Serialize)]
+            struct QuantArch { family: String, layers: u32, hidden_size: u32 }
+            #[derive(candid::CandidType, serde::Serialize)]
+            struct CompressedMeta { compression_ratio: f32, original_size: u64, compressed_size: u64 }
+            #[derive(candid::CandidType, serde::Serialize)]
+            struct CompressedModel { data: Vec<u8>, metadata: CompressedMeta }
+            #[derive(candid::CandidType, serde::Serialize, Clone)]
+            struct Verification { bit_accuracy: f32 }
+            #[derive(candid::CandidType, serde::Serialize)]
+            struct SuperQuantizedModel { architecture: QuantArch, compressed_model: CompressedModel, verification: Verification }
+
+            let sq = SuperQuantizedModel {
+                architecture: QuantArch { family: parsed.architecture.family, layers: parsed.architecture.layers, hidden_size: parsed.architecture.hidden_size },
+                compressed_model: CompressedModel { data: bytes, metadata: CompressedMeta { compression_ratio: parsed.compressed_model.metadata.compression_ratio, original_size: parsed.compressed_model.metadata.original_size, compressed_size: parsed.compressed_model.metadata.compressed_size }},
+                verification: Verification { bit_accuracy: parsed.verification.bit_accuracy },
+            };
+            let verification = sq.verification.clone();
+
+            // Encode candid args: (text, text, SuperQuantizedModel, Verification)
+            let args = Encode!(&model_id, &source_model, &sq, &verification)?;
+
+            // Build agent
+            let url = network.unwrap_or_else(|| "http://127.0.0.1:4943".to_string());
+            use std::env;
+            use ic_agent::identity::BasicIdentity;
+            let agent = if let Some(id_name) = _identity.clone() {
+                let home = env::var("HOME").unwrap_or_else(|_| ".".to_string());
+                let pem_path = format!("{}/.config/dfx/identity/{}/identity.pem", home, id_name);
+                let pem = std::fs::read_to_string(&pem_path)
+                    .map_err(|e| anyhow::anyhow!(format!("load identity {} failed: {}", pem_path, e)))?;
+                let identity = BasicIdentity::from_pem(pem.as_bytes())
+                    .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+                ic_agent::Agent::builder()
+                    .with_identity(identity)
+                    .with_url(url)
+                    .build()?
+            } else if let Ok(pem_path) = env::var("DFX_IDENTITY_PEM") {
+                let pem = std::fs::read_to_string(&pem_path)
+                    .map_err(|e| anyhow::anyhow!(format!("load identity {} failed: {}", pem_path, e)))?;
+                let identity = BasicIdentity::from_pem(pem.as_bytes())
+                    .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+                ic_agent::Agent::builder()
+                    .with_identity(identity)
+                    .with_url(url)
+                    .build()?
+            } else {
+                ic_agent::Agent::builder()
+                    .with_url(url)
+                    .build()?
+            };
+            // On mainnet, fetch root key is not allowed; on local, it's required
+            let _ = futures::executor::block_on(agent.fetch_root_key());
+
+            let canister_id = ic_agent::export::Principal::from_str(&canister)?;
+            let method = "submit_quantized_model";
+            let fut = agent.update(&canister_id, method)
+                .with_arg(args)
+                .call_and_wait();
+            let res = futures::executor::block_on(fut);
+            match res {
+                Ok(_) => println!("{} Published to {} as {}", White.bold().paint("OK"), canister, model_id),
+                Err(e) => {
+                    eprintln!("Publish failed: {}", e);
+                    std::process::exit(1);
                 }
             }
         }
