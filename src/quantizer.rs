@@ -668,18 +668,18 @@ impl Quantizer {
     pub fn save_quantized_model(&self, model: &QuantizedModel, path: &Path) -> Result<(), Box<dyn std::error::Error>> {
         let file = File::create(path)?;
         let mut writer = BufWriter::new(file);
-        
-        // Write magic bytes
-        writer.write_all(b"SAPQ")?; // Super-APQ format
-        
-        // Write version
-        writer.write_all(&[2, 0, 0, 0])?; // Version 2.0.0.0
-        
-        // Serialize and write model
+        // Magic + version
+        writer.write_all(b"SAPQ")?;
+        writer.write_all(&[2, 0, 0, 0])?;
+        // Serialize
         let serialized = bincode::serialize(model)?;
-        writer.write_all(&(serialized.len() as u64).to_le_bytes())?;
-        writer.write_all(&serialized)?;
-        
+        // Super-pack: zstd level 21 for maximum compression
+        let mut encoder = zstd::stream::write::Encoder::new(Vec::new(), 21)?;
+        encoder.write_all(&serialized)?;
+        let packed = encoder.finish()?;
+        // Store packed length + data
+        writer.write_all(&(packed.len() as u64).to_le_bytes())?;
+        writer.write_all(&packed)?;
         writer.flush()?;
         
         println!("Quantized model saved to: {}", path.display());
@@ -695,10 +695,15 @@ impl Quantizer {
             return Err("Invalid SAPQ file format".into());
         }
         
-        // Skip version (4 bytes) and size (8 bytes)
-        let model_data = &data[16..];
-        
-        let model: QuantizedModel = bincode::deserialize(model_data)?;
+        // Version + read packed length
+        let size_bytes: [u8; 8] = data[8..16].try_into()?;
+        let packed_len = u64::from_le_bytes(size_bytes) as usize;
+        let packed = &data[16..16+packed_len];
+        let mut decoder = zstd::stream::read::Decoder::new(packed)?;
+        let mut decompressed = Vec::new();
+        use std::io::Read as _;
+        decoder.read_to_end(&mut decompressed)?;
+        let model: QuantizedModel = bincode::deserialize(&decompressed)?;
         Ok(model)
     }
     // ===== SOTA 2025 Helper Methods (Dynamic, No Hardcoding) =====
@@ -982,6 +987,48 @@ impl Quantizer {
             scale: 1.0,
         })
     }
+
+    /// Save with aggressive bit-packing + zstd (super+)
+    pub fn save_quantized_model_superplus(&self, model: &QuantizedModel, path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+        let mut packed_model = model.clone();
+        for layer in &mut packed_model.layers {
+            for w in &mut layer.weights {
+                if w.bits < 8 {
+                    w.quantized_data = pack_bits(&w.quantized_data, w.bits);
+                }
+            }
+        }
+        let file = File::create(path)?;
+        let mut writer = BufWriter::new(file);
+        writer.write_all(b"SAPQ")?;
+        writer.write_all(&[3, 0, 0, 0])?; // super+ format version 3
+        let serialized = bincode::serialize(&packed_model)?;
+        let mut encoder = zstd::stream::write::Encoder::new(Vec::new(), 22)?;
+        encoder.write_all(&serialized)?;
+        let packed = encoder.finish()?;
+        writer.write_all(&(packed.len() as u64).to_le_bytes())?;
+        writer.write_all(&packed)?;
+        writer.flush()?;
+        println!("Quantized model (super+) saved to: {}", path.display());
+        Ok(())
+    }
+
+}
+
+fn pack_bits(values: &[u8], bits: u8) -> Vec<u8> {
+    if bits >= 8 || bits == 0 { return values.to_vec(); }
+    let mask: u16 = ((1u16 << bits.min(8)) - 1) as u16;
+    let mut out: Vec<u8> = Vec::with_capacity((values.len() as u64 * bits as u64 / 8 + 1) as usize);
+    let mut acc: u16 = 0;
+    let mut acc_bits: u8 = 0;
+    for &v in values {
+        let val = (v as u16) & mask;
+        acc |= val << acc_bits;
+        acc_bits += bits;
+        while acc_bits >= 8 { out.push((acc & 0xFF) as u8); acc >>= 8; acc_bits -= 8; }
+    }
+    if acc_bits > 0 { out.push((acc & 0xFF) as u8); }
+    out
 }
 
 // Helper structs for SOTA methods

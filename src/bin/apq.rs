@@ -19,13 +19,13 @@ struct Cli {
 enum Commands {
     Quantize {
         #[arg(long, help = "Model source: hf:<repo>[:file] | url:<http(s)://...> | ollama:<name> | file:/abs/path | /abs/path")] model: String,
-        #[arg(long, default_value = "SpinQuant")] method: String,
+        #[arg(long, default_value = "TernaryLLMDLT")] method: String,
         #[arg(long, default_value_t = 1.58)] weight_bits: f32,
         #[arg(long, default_value_t = 4)] activation_bits: u8,
         #[arg(long, default_value_t = 128)] group_size: usize,
         #[arg(long, default_value_t = true)] per_channel: bool,
         #[arg(long, value_name = "N", help = "Override CPU threads (default: all cores)")] threads: Option<usize>,
-        #[arg(long, value_name = "speed|balanced|quality", help = "Preset that overrides method/bits/calibration for speed or quality")] preset: Option<String>,
+        #[arg(long, value_name = "speed|balanced|quality|super|super+", help = "Preset that overrides method/bits/calibration")] preset: Option<String>,
         #[arg(long, default_value_t = false, help = "Reduce RAM usage (bigger groups, fewer samples)")] low_mem: bool,
         #[arg(long, help = "Optional path to save SAPQ artifact (binary)")] out: Option<String>,
     },
@@ -129,6 +129,26 @@ fn main() -> anyhow::Result<()> {
                         // keep provided settings, but more samples
                         config.calibration_samples = 1024;
                     }
+                    "super" => {
+                        // Extreme compression defaults
+                        method = QuantizationMethod::TernaryLLMDLT;
+                        config.method = method;
+                        config.weight_bits = 1.58;
+                        config.activation_bits = 4;
+                        config.group_size = 512;
+                        config.per_channel = false;
+                        config.calibration_samples = 256;
+                    }
+                    "super+" => {
+                        // Even more aggressive; runtime remains CPU-safe due to low_mem/threads knobs
+                        method = QuantizationMethod::TernaryLLMDLT;
+                        config.method = method;
+                        config.weight_bits = 1.58;
+                        config.activation_bits = 2;
+                        config.group_size = 1024;
+                        config.per_channel = false;
+                        config.calibration_samples = 384;
+                    }
                     _ => {}
                 }
             }
@@ -161,9 +181,12 @@ fn main() -> anyhow::Result<()> {
             );
             if let Some(path) = out {
                 use std::path::Path;
-                quantizer
-                    .save_quantized_model(&result, Path::new(&path))
-                    .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+                let save_res = if matches!(preset.as_deref(), Some("super+")) {
+                    quantizer.save_quantized_model_superplus(&result, Path::new(&path))
+                } else {
+                    quantizer.save_quantized_model(&result, Path::new(&path))
+                };
+                save_res.map_err(|e| anyhow::anyhow!(e.to_string()))?;
                 println!("{} Saved SAPQ artifact to {}", White.bold().paint("OK"), path);
             }
         }
@@ -336,7 +359,7 @@ fn main() -> anyhow::Result<()> {
                     .map_err(|e| anyhow::anyhow!(e.to_string()))?;
                 ic_agent::Agent::builder()
                     .with_identity(identity)
-                    .with_url(url)
+                    .with_url(&url)
                     .build()?
             } else if let Ok(pem_path) = env::var("DFX_IDENTITY_PEM") {
                 let pem = std::fs::read_to_string(&pem_path)
@@ -345,15 +368,17 @@ fn main() -> anyhow::Result<()> {
                     .map_err(|e| anyhow::anyhow!(e.to_string()))?;
                 ic_agent::Agent::builder()
                     .with_identity(identity)
-                    .with_url(url)
+                    .with_url(&url)
                     .build()?
             } else {
                 ic_agent::Agent::builder()
-                    .with_url(url)
+                    .with_url(&url)
                     .build()?
             };
             // On mainnet, fetch root key is not allowed; on local, it's required
-            let _ = futures::executor::block_on(agent.fetch_root_key());
+            if url.contains("127.0.0.1") || url.contains("localhost") {
+                let _ = futures::executor::block_on(agent.fetch_root_key());
+            }
 
             let canister_id = ic_agent::export::Principal::from_str(&canister)?;
             let method = "submit_quantized_model";
