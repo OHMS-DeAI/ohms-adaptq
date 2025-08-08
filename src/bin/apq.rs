@@ -385,7 +385,9 @@ fn main() -> anyhow::Result<()> {
             let fut = agent.update(&canister_id, method)
                 .with_arg(args)
                 .call_and_wait();
-            let res = futures::executor::block_on(fut);
+            let res = tokio::runtime::Runtime::new()
+                .expect("tokio runtime")
+                .block_on(fut);
             match res {
                 Ok(_) => println!("{} Published to {} as {}", White.bold().paint("OK"), canister, model_id),
                 Err(e) => {
