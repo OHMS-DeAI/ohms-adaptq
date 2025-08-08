@@ -375,19 +375,20 @@ fn main() -> anyhow::Result<()> {
                     .with_url(&url)
                     .build()?
             };
-            // On mainnet, fetch root key is not allowed; on local, it's required
+            // Create Tokio runtime for async agent calls
+            let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
+            // On local replica, root key fetch is required
             if url.contains("127.0.0.1") || url.contains("localhost") {
-                let _ = futures::executor::block_on(agent.fetch_root_key());
+                let _ = rt.block_on(agent.fetch_root_key());
             }
 
             let canister_id = ic_agent::export::Principal::from_str(&canister)?;
             let method = "submit_quantized_model";
-            let fut = agent.update(&canister_id, method)
-                .with_arg(args)
-                .call_and_wait();
-            let res = tokio::runtime::Runtime::new()
-                .expect("tokio runtime")
-                .block_on(fut);
+            let res = rt.block_on(
+                agent.update(&canister_id, method)
+                    .with_arg(args)
+                    .call_and_wait()
+            );
             match res {
                 Ok(_) => println!("{} Published to {} as {}", White.bold().paint("OK"), canister, model_id),
                 Err(e) => {
