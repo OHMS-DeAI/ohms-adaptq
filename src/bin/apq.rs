@@ -349,27 +349,38 @@ fn main() -> anyhow::Result<()> {
             // Build agent
             let url = network.unwrap_or_else(|| "http://127.0.0.1:4943".to_string());
             use std::env;
-            use ic_agent::identity::BasicIdentity;
+            use ic_agent::identity::{BasicIdentity, Secp256k1Identity};
             let agent = if let Some(id_name) = _identity.clone() {
                 let home = env::var("HOME").unwrap_or_else(|_| ".".to_string());
                 let pem_path = format!("{}/.config/dfx/identity/{}/identity.pem", home, id_name);
-                let pem = std::fs::read_to_string(&pem_path)
-                    .map_err(|e| anyhow::anyhow!(format!("load identity {} failed: {}", pem_path, e)))?;
-                let identity = BasicIdentity::from_pem(pem.as_bytes())
-                    .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-                ic_agent::Agent::builder()
-                    .with_identity(identity)
-                    .with_url(&url)
-                    .build()?
+                // Prefer `dfx identity export <name>` to get a PEM format compatible with ic-agent
+                let pem = match std::process::Command::new("bash")
+                    .arg("-lc")
+                    .arg(format!("dfx identity export {} 2>/dev/null", id_name))
+                    .output()
+                {
+                    Ok(out) if out.status.success() && !out.stdout.is_empty() => String::from_utf8_lossy(&out.stdout).to_string(),
+                    _ => std::fs::read_to_string(&pem_path)
+                        .map_err(|e| anyhow::anyhow!(format!("load identity {} failed: {}", pem_path, e)))?,
+                };
+                // Try secp256k1 first, then ed25519
+                if let Ok(sec) = Secp256k1Identity::from_pem(pem.as_bytes()) {
+                    ic_agent::Agent::builder().with_identity(sec).with_url(&url).build()?
+                } else {
+                    let basic = BasicIdentity::from_pem(pem.as_bytes())
+                        .map_err(|e| anyhow::anyhow!(format!("failed to parse PEM as secp256k1 or ed25519: {}", e)))?;
+                    ic_agent::Agent::builder().with_identity(basic).with_url(&url).build()?
+                }
             } else if let Ok(pem_path) = env::var("DFX_IDENTITY_PEM") {
                 let pem = std::fs::read_to_string(&pem_path)
                     .map_err(|e| anyhow::anyhow!(format!("load identity {} failed: {}", pem_path, e)))?;
-                let identity = BasicIdentity::from_pem(pem.as_bytes())
-                    .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-                ic_agent::Agent::builder()
-                    .with_identity(identity)
-                    .with_url(&url)
-                    .build()?
+                if let Ok(sec) = Secp256k1Identity::from_pem(pem.as_bytes()) {
+                    ic_agent::Agent::builder().with_identity(sec).with_url(&url).build()?
+                } else {
+                    let basic = BasicIdentity::from_pem(pem.as_bytes())
+                        .map_err(|e| anyhow::anyhow!(format!("failed to parse PEM as secp256k1 or ed25519: {}", e)))?;
+                    ic_agent::Agent::builder().with_identity(basic).with_url(&url).build()?
+                }
             } else {
                 ic_agent::Agent::builder()
                     .with_url(&url)
