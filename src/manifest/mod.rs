@@ -1,28 +1,30 @@
-// Manifest Module - Enhanced for Super-APQ
-// Handles ultra-compressed model artifacts
+// Manifest Module - NOVAQ Deployment Artifacts
+// Handles NOVAQ compressed model artifacts and deployment manifests
 
-use crate::quantization::QuantizationResult;
-use crate::super_apq_min::SuperQuantizedModel;
+use crate::novaq::NOVAQModel;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use chrono;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Manifest {
     pub model_id: String,
     pub version: String,
-    pub compression_type: String, // "super-apq" or "legacy-apq"
+    pub compression_type: String, // "novaq"
     pub chunks: Vec<ChunkInfo>,
     pub digest: String,
-    pub super_apq_metadata: Option<SuperAPQMetadata>,
+    pub novaq_metadata: NOVAQMetadata,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SuperAPQMetadata {
-    pub weight_bits: f32,          // 1.58 for Super-APQ
-    pub activation_bits: u8,       // 4 with Hadamard
-    pub compression_ratio: f32,    // ~1000x
-    pub capability_retention: f32, // 99.8%
-    pub energy_reduction: f32,     // 71x
+pub struct NOVAQMetadata {
+    pub target_bits: f32,           // 1.5 for NOVAQ
+    pub num_subspaces: usize,       // Multi-stage codebooks
+    pub compression_ratio: f32,     // 93-100x
+    pub bit_accuracy: f32,          // >99%
+    pub quality_score: f32,         // Overall quality metric
+    pub codebook_size_l1: usize,    // Level 1 codebook size
+    pub codebook_size_l2: usize,    // Level 2 codebook size
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -41,67 +43,44 @@ pub struct ModelMeta {
     pub vocab_size: usize,
     pub ctx_window: usize,
     pub license: String,
-    pub quantization: String, // "super-apq-v2" or "apq-v1"
+    pub quantization: String, // "novaq"
 }
 
 pub struct ManifestBuilder;
 
 impl ManifestBuilder {
-    /// Create manifest from Super-APQ result
-    pub fn from_super_apq(result: &SuperQuantizedModel, version: &str) -> crate::Result<Manifest> {
+    /// Create manifest from NOVAQ result
+    pub fn from_novaq_model(model: &NOVAQModel, model_id: &str, version: &str) -> crate::Result<Manifest> {
+        // Serialize the model to get the actual data size
+        let model_data = bincode::serialize(model)?;
+        
         let chunk = ChunkInfo {
-            id: "super_compressed".to_string(),
+            id: "novaq_compressed".to_string(),
             offset: 0,
-            size: result.compressed_model.metadata.compressed_size,
-            sha256: hex::encode(Sha256::digest(&result.compressed_model.data)),
+            size: model_data.len(),
+            sha256: hex::encode(Sha256::digest(&model_data)),
         };
 
-        let super_metadata = SuperAPQMetadata {
-            weight_bits: 1.58,
-            activation_bits: 4,
-            compression_ratio: result.compressed_model.metadata.compression_ratio,
-            capability_retention: 99.8,
-            energy_reduction: 71.0,
+        let novaq_metadata = NOVAQMetadata {
+            target_bits: model.config.target_bits,
+            num_subspaces: model.config.num_subspaces,
+            compression_ratio: model.compression_ratio,
+            bit_accuracy: model.bit_accuracy,
+            quality_score: (model.compression_ratio / 100.0 + model.bit_accuracy) / 2.0,
+            codebook_size_l1: model.config.codebook_size_l1,
+            codebook_size_l2: model.config.codebook_size_l2,
         };
 
         let manifest_data = serde_json::to_string(&chunk)?;
         let digest = hex::encode(Sha256::digest(manifest_data.as_bytes()));
 
         Ok(Manifest {
-            model_id: format!("layers{}_super", result.architecture.layers),
+            model_id: model_id.to_string(),
             version: version.to_string(),
-            compression_type: "super-apq".to_string(),
+            compression_type: "novaq".to_string(),
             chunks: vec![chunk],
             digest,
-            super_apq_metadata: Some(super_metadata),
-        })
-    }
-
-    /// Legacy method for backward compatibility
-    pub fn from_quantization_result(result: &QuantizationResult, version: &str) -> crate::Result<Manifest> {
-        let mut chunks = Vec::new();
-        let mut offset = 0;
-
-        for chunk in &result.chunks {
-            chunks.push(ChunkInfo {
-                id: chunk.id.clone(),
-                offset,
-                size: chunk.size,
-                sha256: chunk.sha256.clone(),
-            });
-            offset += chunk.size;
-        }
-
-        let manifest_data = serde_json::to_string(&chunks)?;
-        let digest = hex::encode(Sha256::digest(manifest_data.as_bytes()));
-
-        Ok(Manifest {
-            model_id: result.metadata.model_id.clone(),
-            version: version.to_string(),
-            compression_type: "legacy-apq".to_string(),
-            chunks,
-            digest,
-            super_apq_metadata: None,
+            novaq_metadata,
         })
     }
 
@@ -120,7 +99,7 @@ impl ManifestBuilder {
             vocab_size,
             ctx_window,
             license: license.to_string(),
-            quantization: "super-apq-v2".to_string(),
+            quantization: "novaq".to_string(),
         }
     }
 
@@ -145,28 +124,55 @@ impl ManifestBuilder {
 
     /// Get compression statistics from manifest
     pub fn get_stats(manifest: &Manifest) -> String {
-        if let Some(meta) = &manifest.super_apq_metadata {
-            format!(
-                "Super-APQ Stats:\n\
-                 • Weight bits: {}\n\
-                 • Activation bits: {}\n\
-                 • Compression: {}x\n\
-                 • Capability: {}%\n\
-                 • Energy reduction: {}x",
-                meta.weight_bits,
-                meta.activation_bits,
-                meta.compression_ratio,
-                meta.capability_retention,
-                meta.energy_reduction
-            )
-        } else {
-            format!(
-                "Legacy APQ Stats:\n\
-                 • Chunks: {}\n\
-                 • Total size: {} bytes",
-                manifest.chunks.len(),
-                manifest.chunks.iter().map(|c| c.size).sum::<usize>()
-            )
-        }
+        let meta = &manifest.novaq_metadata;
+        format!(
+            "NOVAQ Stats:\n\
+             • Target bits: {}\n\
+             • Subspaces: {}\n\
+             • Compression: {:.1}x\n\
+             • Bit accuracy: {:.3}%\n\
+             • Quality score: {:.3}\n\
+             • L1 codebook: {}\n\
+             • L2 codebook: {}",
+            meta.target_bits,
+            meta.num_subspaces,
+            meta.compression_ratio,
+            meta.bit_accuracy * 100.0,
+            meta.quality_score,
+            meta.codebook_size_l1,
+            meta.codebook_size_l2
+        )
+    }
+
+    /// Create deployment manifest for OHMS platform
+    pub fn create_deployment_manifest(
+        model: &NOVAQModel,
+        model_id: &str,
+        admin_principal: &str,
+        description: &str,
+        ohms_canister: &str,
+    ) -> crate::Result<serde_json::Value> {
+        let model_data = bincode::serialize(model)?;
+        
+        Ok(serde_json::json!({
+            "model_id": model_id,
+            "admin_principal": admin_principal,
+            "description": description,
+            "ohms_canister": ohms_canister,
+            "compression_type": "novaq",
+            "compression_ratio": model.compression_ratio,
+            "bit_accuracy": model.bit_accuracy,
+            "quality_score": (model.compression_ratio / 100.0 + model.bit_accuracy) / 2.0,
+            "submission_timestamp": chrono::Utc::now().timestamp(),
+            "model_size_bytes": model_data.len(),
+            "checksum": hex::encode(Sha256::digest(&model_data)),
+            "novaq_config": {
+                "target_bits": model.config.target_bits,
+                "num_subspaces": model.config.num_subspaces,
+                "codebook_size_l1": model.config.codebook_size_l1,
+                "codebook_size_l2": model.config.codebook_size_l2,
+                "refinement_iterations": model.config.refinement_iterations
+            }
+        }))
     }
 }
