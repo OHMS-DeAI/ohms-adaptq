@@ -200,11 +200,6 @@ For a weight matrix **W**∈ℝ^{m×d}:
 - **No Approval**: No admin review or approval process
 - **No Licensing**: MIT license - use freely
 
-### Real Implementation
-- **No Mocks**: Actual working compression
-- **No Placeholders**: Real model processing
-- **No Simulations**: True NOVAQ algorithm
-- **Production Ready**: Deploy immediately
 
 ### Universal Access
 - **Any Model**: Hugging Face, Ollama, local files
@@ -237,7 +232,7 @@ MIT License - Use NOVAQ freely for any purpose.
 
 ## 🙏 Acknowledgments
 
-- **Okware Systems Research Group** - Core NOVAQ research
+- **OHMS Team** - Core NOVAQ research
 - **Hugging Face** - Model repository and tools
 - **Ollama** - Local model management
 - **Open Source Community** - Democratic AI development

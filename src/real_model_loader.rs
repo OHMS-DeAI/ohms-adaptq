@@ -19,6 +19,39 @@ pub struct ModelStats {
 pub struct RealModelLoader;
 
 impl RealModelLoader {
+    /// Convert BF16 (Brain Float 16) to F32
+    fn bf16_to_f32(bf16_bits: u16) -> f32 {
+        // BF16 has 1 sign bit, 8 exponent bits, 7 mantissa bits
+        let sign = (bf16_bits >> 15) & 0x1;
+        let exponent = (bf16_bits >> 7) & 0xFF;
+        let mantissa = bf16_bits & 0x7F;
+        
+        if exponent == 0 {
+            // Zero or denormalized
+            if mantissa == 0 {
+                return 0.0;
+            } else {
+                // Denormalized - very small numbers
+                let f32_mantissa = mantissa as f32 / 128.0;
+                return if sign == 1 { -f32_mantissa } else { f32_mantissa };
+            }
+        } else if exponent == 0xFF {
+            // Infinity or NaN
+            if mantissa == 0 {
+                return if sign == 1 { f32::NEG_INFINITY } else { f32::INFINITY };
+            } else {
+                return f32::NAN;
+            }
+        } else {
+            // Normalized number
+            let f32_exponent = (exponent as i32 - 127) + 127; // Adjust bias
+            let f32_mantissa = mantissa as u32;
+            
+            let f32_bits = (sign as u32) << 31 | (f32_exponent as u32) << 23 | f32_mantissa << 16;
+            return f32::from_bits(f32_bits);
+        }
+    }
+
     /// Load model from fetch result and convert to NOVAQ-compatible weights
     pub fn load_model(fetch_result: &FetchResult) -> Result<Vec<WeightMatrix>> {
         match &fetch_result.model_format {
@@ -87,6 +120,18 @@ impl RealModelLoader {
                             if i < data.len() {
                                 let f16_val = u16::from_le_bytes([chunk[0], chunk[1]]);
                                 data[i] = half::f16::from_bits(f16_val).to_f32();
+                            }
+                        }
+                        data
+                    },
+                    "BF16" | "bfloat16" => {
+                        let mut data = vec![0f32; tensor_size / 2];
+                        let mut bytes = vec![0u8; tensor_size];
+                        file.read_exact(&mut bytes)?;
+                        for (i, chunk) in bytes.chunks(2).enumerate() {
+                            if i < data.len() {
+                                let bf16_val = u16::from_le_bytes([chunk[0], chunk[1]]);
+                                data[i] = Self::bf16_to_f32(bf16_val);
                             }
                         }
                         data
