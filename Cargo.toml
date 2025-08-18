@@ -7,7 +7,7 @@ description = "NOVAQ: Normalized Outlier-Vector Additive Quantization - Democrat
 license = "MIT"
 repository = "https://github.com/OHMS-DeAI/ohms-adaptq"
 homepage = "https://ohms-project.org"
-keywords = ["llm", "quantization", "novaq", "compression", "ai", "democratic", "open-access"]
+keywords = ["llm", "quantization", "novaq", "compression", "ai"]
 categories = ["compression", "science", "algorithms"]
 
 [[bin]]
