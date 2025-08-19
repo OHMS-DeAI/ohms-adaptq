@@ -1,5 +1,5 @@
 use crate::Result;
-use super::{WeightMatrix, VectorCodebooks, QuantizationIndices, CodebookEntry};
+use super::{WeightMatrix, VectorCodebooks, QuantizationIndices, CodebookEntry, SubspaceStrategy, FallbackQuantizer, QuantizationStrategy};
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 
@@ -20,6 +20,8 @@ pub struct CodebookBuilder {
     rng: ChaCha8Rng,
     max_kmeans_iterations: usize,
     convergence_threshold: f32,
+    subspace_strategy: SubspaceStrategy,
+    fallback_quantizer: FallbackQuantizer,
 }
 
 impl CodebookBuilder {
@@ -31,57 +33,61 @@ impl CodebookBuilder {
             rng: ChaCha8Rng::seed_from_u64(seed),
             max_kmeans_iterations: 100,
             convergence_threshold: 1e-6,
+            subspace_strategy: SubspaceStrategy::new(num_subspaces, codebook_size_l1, codebook_size_l2),
+            fallback_quantizer: FallbackQuantizer::new(),
         }
     }
     
-    /// Build multi-stage vector codebooks for given weight matrix
+    /// Build multi-stage vector codebooks for given weight matrix with enhanced stability
     pub fn build_codebooks(&mut self, weights: &WeightMatrix) -> Result<(VectorCodebooks, QuantizationIndices)> {
         let rows = weights.rows();
         let cols = weights.cols();
         
-        // Calculate effective subspaces and subspace size
-        // Automatically adjust subspaces to fit tensor dimensions
-        let effective_subspaces = if cols < self.num_subspaces {
-            // For small tensors, use fewer subspaces
-            cols
-        } else {
-            // Find largest divisor <= num_subspaces that divides cols
-            let mut best_subspaces = 1;
-            for s in 1..=self.num_subspaces {
-                if cols % s == 0 {
-                    best_subspaces = s;
-                }
-            }
-            best_subspaces
-        };
+        // Use enhanced subspace strategy to determine optimal configuration
+        let config = self.subspace_strategy.determine_config(rows, cols);
         
-        let subspace_size = cols / effective_subspaces;
+        // Print configuration for user feedback
+        self.subspace_strategy.print_config(&config, rows, cols);
         
-        // Log adjustment if needed
-        if effective_subspaces != self.num_subspaces {
-            eprintln!("NOVAQ: Adjusted subspaces from {} to {} for tensor width {} (subspace size: {})", 
-                self.num_subspaces, effective_subspaces, cols, subspace_size);
+        // Handle edge cases with fallback quantization
+        if config.strategy == QuantizationStrategy::ScalarQuantization {
+            return self.fallback_quantizer.scalar_quantize(weights, &config);
         }
+        
+        // Use the determined configuration for quantization
+        let effective_subspaces = config.effective_subspaces;
+        let subspace_size = config.subspace_size;
+        let l1_size = config.codebook_size_l1;
+        let l2_size = config.codebook_size_l2;
         
         let mut level1_codebooks = Vec::with_capacity(effective_subspaces);
         let mut level2_codebooks = Vec::with_capacity(effective_subspaces);
         let mut level1_indices = vec![vec![0u8; effective_subspaces]; rows];
         let mut level2_indices = vec![vec![0u8; effective_subspaces]; rows];
         
-        // Process each subspace
+        // Process each subspace with enhanced error handling
         for subspace_idx in 0..effective_subspaces {
             let start_col = subspace_idx * subspace_size;
             let end_col = start_col + subspace_size;
+            
+            // Bounds checking to prevent array access errors
+            if end_col > cols {
+                return Err(format!("Subspace bounds error: end_col {} > cols {}", end_col, cols).into());
+            }
             
             // Extract subspace vectors
             let mut subspace_vectors = Vec::with_capacity(rows);
             for row_idx in 0..rows {
                 let row = weights.get_row(row_idx);
-                subspace_vectors.push(row[start_col..end_col].to_vec());
+                if end_col <= row.len() {
+                    subspace_vectors.push(row[start_col..end_col].to_vec());
+                } else {
+                    return Err(format!("Row bounds error: end_col {} > row.len() {}", end_col, row.len()).into());
+                }
             }
             
-            // Stage 1: Build first-level codebook using k-means
-            let l1_codebook = self.build_kmeans_codebook(&subspace_vectors, self.codebook_size_l1)?;
+            // Stage 1: Build first-level codebook with enhanced parameters
+            let l1_codebook = self.build_kmeans_codebook(&subspace_vectors, l1_size)?;
             
             // Stage 2: Calculate residuals and build second-level codebook
             let mut residuals = Vec::with_capacity(rows);
@@ -95,8 +101,8 @@ impl CodebookBuilder {
                 residuals.push(residual);
             }
             
-            // Build second-level codebook for residuals
-            let l2_codebook = self.build_kmeans_codebook(&residuals, self.codebook_size_l2)?;
+            // Build second-level codebook for residuals with enhanced parameters
+            let l2_codebook = self.build_kmeans_codebook(&residuals, l2_size)?;
             
             // Assign residuals to L2 codebook
             for (row_idx, residual) in residuals.iter().enumerate() {
@@ -119,6 +125,7 @@ impl CodebookBuilder {
             level2_indices,
         };
         
+        println!("✅ Codebook generation completed successfully");
         Ok((codebooks, indices))
     }
     

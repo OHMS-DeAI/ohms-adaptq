@@ -1,6 +1,6 @@
 [package]
 name = "ohms-adaptq"
-version = "2.0.2"
+version = "2.0.3"
 edition = "2021"
 authors = ["Dedan Okware <softengdedan@gmail.com>"]
 description = "NOVAQ: Normalized Outlier-Vector Additive Quantization - Democratic 93-100x LLM compression with 99%+ accuracy retention. No restrictions, no gatekeeping."
@@ -13,6 +13,14 @@ categories = ["compression", "science", "algorithms"]
 [[bin]]
 name = "novaq"
 path = "src/bin/novaq.rs"
+
+[[bin]]
+name = "integrate-novaq"
+path = "src/bin/integrate_novaq_model.rs"
+
+[[bin]]
+name = "benchmark-novaq"
+path = "src/bin/benchmark_novaq.rs"
 
 [dependencies]
 # Core dependencies

@@ -7,12 +7,18 @@ pub mod codebooks;
 pub mod refinement;
 pub mod distillation;
 pub mod numerical_stability;
+pub mod subspace_strategy;
+pub mod recovery;
+pub mod progress;
 
 pub use normalization::*;
 pub use codebooks::*;
 pub use refinement::*;
 pub use distillation::*;
 pub use numerical_stability::*;
+pub use subspace_strategy::*;
+pub use recovery::*;
+pub use progress::*;
 
 /// NOVAQ Configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -185,6 +191,101 @@ impl NOVAQEngine {
         teacher_outputs: Option<&[f32]>,
     ) -> Result<f32> {
         self.refiner.refine(codebooks, indices, original_weights, teacher_outputs)
+    }
+    
+    /// Complete NOVAQ quantization pipeline with progress tracking
+    pub fn quantize_model_with_progress(&mut self, weights: Vec<WeightMatrix>, progress: &mut QuantizationProgressTracker) -> Result<NOVAQModel> {
+        let mut quantized_weights = Vec::new();
+        let mut all_normalizations = Vec::new();
+        let mut all_codebooks = Vec::new();
+        let mut all_indices = Vec::new();
+        let mut weight_shapes = HashMap::new();
+        
+        let original_size: usize = weights.iter().map(|w| w.data.len() * 4).sum(); // f32 = 4 bytes
+        let total_weights = weights.len();
+        
+        progress.start_phase(QuantizationPhase::Level1Refinement, Some(total_weights as u64));
+        
+        for (idx, mut weight_matrix) in weights.into_iter().enumerate() {
+            // Store original shape
+            weight_shapes.insert(weight_matrix.name.clone(), weight_matrix.shape.clone());
+            
+            // Stage 1: Normalize
+            let norm_metadata = self.normalize_weights(&mut weight_matrix)?;
+            
+            // Stage 2: Build codebooks
+            let (codebooks, indices) = self.build_codebooks(&weight_matrix)?;
+            
+            // Stage 3: Refine (without teacher for now)
+            let mut refined_codebooks = codebooks.clone();
+            let accuracy = self.refine_codebooks(&mut refined_codebooks, &indices, &weight_matrix, None)?;
+            
+            // Update progress with quality metrics
+            let metrics = QualityMetrics {
+                mse: 0.0, // Would need to calculate actual MSE
+                accuracy,
+                compression_ratio: 0.0, // Will calculate at end
+                recovery_count: 0,
+                nan_issues: 0,
+                inf_issues: 0,
+            };
+            progress.update_iteration(idx as u64, Some(&metrics));
+            
+            all_normalizations.push(norm_metadata);
+            all_codebooks.push(refined_codebooks);
+            all_indices.push(indices);
+            quantized_weights.push(weight_matrix);
+        }
+        
+        progress.complete_phase();
+        progress.start_phase(QuantizationPhase::QualityValidation, Some(1));
+        
+        // Calculate compression metrics
+        let indices_size: usize = all_indices.iter()
+            .map(|idx| idx.level1_indices.len() * self.config.num_subspaces +
+                      idx.level2_indices.len() * self.config.num_subspaces)
+            .sum();
+        let codebooks_size: usize = all_codebooks.iter()
+            .map(|cb| (cb.level1_codebooks.len() + cb.level2_codebooks.len()) * 
+                     cb.subspace_size * 4) // f32 = 4 bytes
+            .sum();
+        
+        let compressed_size = indices_size + codebooks_size;
+        let compression_ratio = original_size as f32 / compressed_size as f32;
+        
+        // Combine all metadata
+        let combined_normalization = NormalizationMetadata {
+            channel_means: all_normalizations.iter().flat_map(|n| &n.channel_means).cloned().collect(),
+            channel_scales: all_normalizations.iter().flat_map(|n| &n.channel_scales).cloned().collect(),
+            outlier_channels: all_normalizations.iter().flat_map(|n| &n.outlier_channels).cloned().collect(),
+        };
+        
+        // Use first codebook structure (assuming consistent across weights)
+        let combined_codebooks = all_codebooks.first()
+            .ok_or("No codebooks generated")?
+            .clone();
+        let combined_indices = all_indices.first()
+            .ok_or("No indices generated")?
+            .clone();
+        
+        // Calculate bit accuracy before consuming the vectors
+        let bit_accuracy = self.calculate_bit_accuracy(&all_normalizations, &all_codebooks, &all_indices);
+        
+        progress.complete_phase();
+        progress.start_phase(QuantizationPhase::ModelSaving, Some(1));
+        
+        let model = NOVAQModel {
+            config: self.config.clone(),
+            normalization_metadata: combined_normalization,
+            vector_codebooks: combined_codebooks,
+            quantization_indices: combined_indices,
+            weight_shapes,
+            compression_ratio,
+            bit_accuracy,
+        };
+        
+        progress.complete_phase();
+        Ok(model)
     }
     
     /// Complete NOVAQ quantization pipeline

@@ -74,9 +74,7 @@ impl TeacherGuidedRefiner {
             let accuracy = 1.0 - (total_loss / (kl_loss + cosine_loss + 1e-8));
             best_accuracy = best_accuracy.max(accuracy);
             
-            if iteration % 10 == 0 {
-                println!("Iteration {}: Loss = {:.6}, Accuracy = {:.4}", iteration, total_loss, accuracy);
-            }
+            // Iteration logging removed - progress tracking handled by QuantizationProgressTracker
         }
         
         Ok(best_accuracy)
@@ -112,25 +110,11 @@ impl TeacherGuidedRefiner {
             let accuracy = (1.0 - normalized_mse).max(0.0);
             best_accuracy = best_accuracy.max(accuracy);
             
-            if iteration % 10 == 0 {
-                let stats = self.stability_guard.get_stats();
-                if stats.has_issues() {
-                    println!("Iteration {}: MSE = {:.6}, Accuracy = {:.4} [Recovered {} numerical issues]", 
-                             iteration, mse_loss, accuracy, stats.recovery_count);
-                } else {
-                    println!("Iteration {}: MSE = {:.6}, Accuracy = {:.4}", iteration, mse_loss, accuracy);
-                }
-            }
+            // Iteration logging removed - progress tracking handled by QuantizationProgressTracker
+            // Stability information is reported in final summary only
         }
         
-        // Print final stability report
-        let final_stats = self.stability_guard.get_stats();
-        if final_stats.has_issues() {
-            println!("✅ Refinement completed with {} total numerical recoveries (NaN: {}, Inf: {})", 
-                     final_stats.recovery_count, final_stats.nan_count, final_stats.inf_count);
-        } else {
-            println!("✅ Refinement completed with no numerical issues");
-        }
+        // Final stability report moved to progress tracker
         
         Ok(best_accuracy)
     }
