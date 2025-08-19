@@ -6,11 +6,13 @@ pub mod normalization;
 pub mod codebooks;
 pub mod refinement;
 pub mod distillation;
+pub mod numerical_stability;
 
 pub use normalization::*;
 pub use codebooks::*;
 pub use refinement::*;
 pub use distillation::*;
+pub use numerical_stability::*;
 
 /// NOVAQ Configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]

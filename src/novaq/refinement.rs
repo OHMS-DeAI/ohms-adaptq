@@ -1,5 +1,5 @@
 use crate::Result;
-use super::{WeightMatrix, VectorCodebooks, QuantizationIndices};
+use super::{WeightMatrix, VectorCodebooks, QuantizationIndices, NumericalStabilityGuard};
 
 /// Teacher-guided Refiner implementing Stage 3 of NOVAQ
 /// 
@@ -19,6 +19,7 @@ pub struct TeacherGuidedRefiner {
     cosine_weight: f32,
     learning_rate: f32,
     convergence_threshold: f32,
+    stability_guard: NumericalStabilityGuard,
 }
 
 impl TeacherGuidedRefiner {
@@ -29,6 +30,7 @@ impl TeacherGuidedRefiner {
             cosine_weight,
             learning_rate,
             convergence_threshold: 1e-6,
+            stability_guard: NumericalStabilityGuard::default(),
         }
     }
     
@@ -111,8 +113,23 @@ impl TeacherGuidedRefiner {
             best_accuracy = best_accuracy.max(accuracy);
             
             if iteration % 10 == 0 {
-                println!("Iteration {}: MSE = {:.6}, Accuracy = {:.4}", iteration, mse_loss, accuracy);
+                let stats = self.stability_guard.get_stats();
+                if stats.has_issues() {
+                    println!("Iteration {}: MSE = {:.6}, Accuracy = {:.4} [Recovered {} numerical issues]", 
+                             iteration, mse_loss, accuracy, stats.recovery_count);
+                } else {
+                    println!("Iteration {}: MSE = {:.6}, Accuracy = {:.4}", iteration, mse_loss, accuracy);
+                }
             }
+        }
+        
+        // Print final stability report
+        let final_stats = self.stability_guard.get_stats();
+        if final_stats.has_issues() {
+            println!("✅ Refinement completed with {} total numerical recoveries (NaN: {}, Inf: {})", 
+                     final_stats.recovery_count, final_stats.nan_count, final_stats.inf_count);
+        } else {
+            println!("✅ Refinement completed with no numerical issues");
         }
         
         Ok(best_accuracy)
@@ -210,16 +227,9 @@ impl TeacherGuidedRefiner {
         1.0 - cosine_sim
     }
     
-    /// Compute MSE loss for reconstruction
-    fn compute_mse_loss(&self, original: &[f32], reconstructed: &[f32]) -> f32 {
-        assert_eq!(original.len(), reconstructed.len());
-        
-        let mse: f32 = original.iter()
-            .zip(reconstructed.iter())
-            .map(|(&orig, &recon)| (orig - recon).powi(2))
-            .sum::<f32>() / original.len() as f32;
-        
-        mse
+    /// Compute MSE loss for reconstruction using numerical stability guard
+    fn compute_mse_loss(&mut self, original: &[f32], reconstructed: &[f32]) -> f32 {
+        self.stability_guard.safe_mse(original, reconstructed)
     }
     
     /// Apply softmax to convert logits to probabilities
@@ -255,10 +265,27 @@ impl TeacherGuidedRefiner {
         let rows = original_weights.rows();
         let num_subspaces = codebooks.level1_codebooks.len();
         
+        // Early return for edge cases that cause NaN
+        if rows == 0 || num_subspaces == 0 || codebooks.subspace_size == 0 {
+            return Ok(());
+        }
+        
+        // Use adaptive learning rate for small tensors
+        let adaptive_lr = if codebooks.subspace_size == 1 {
+            self.learning_rate * 0.1  // Reduce learning rate for 1D subspaces
+        } else {
+            self.learning_rate
+        };
+        
         // Update each codebook entry based on assigned vectors
         for subspace_idx in 0..num_subspaces {
             let start_col = subspace_idx * codebooks.subspace_size;
             let end_col = start_col + codebooks.subspace_size;
+            
+            // Safety check for column bounds
+            if end_col > original_weights.cols() {
+                continue;
+            }
             
             // Update L1 codebook
             for centroid_idx in 0..codebooks.level1_codebooks[subspace_idx].len() {
@@ -266,19 +293,27 @@ impl TeacherGuidedRefiner {
                 
                 // Collect vectors assigned to this centroid
                 for row_idx in 0..rows {
-                    if indices.level1_indices[row_idx][subspace_idx] == centroid_idx as u8 {
+                    if row_idx < indices.level1_indices.len() && 
+                       subspace_idx < indices.level1_indices[row_idx].len() &&
+                       indices.level1_indices[row_idx][subspace_idx] == centroid_idx as u8 {
                         let row = original_weights.get_row(row_idx);
-                        assigned_vectors.push(&row[start_col..end_col]);
+                        if end_col <= row.len() {
+                            assigned_vectors.push(&row[start_col..end_col]);
+                        }
                     }
                 }
                 
-                // Update centroid as mean of assigned vectors
+                // Update centroid as mean of assigned vectors with comprehensive stability protection
                 if !assigned_vectors.is_empty() {
                     let centroid = &mut codebooks.level1_codebooks[subspace_idx][centroid_idx].centroid;
                     for dim in 0..centroid.len() {
-                        let mean = assigned_vectors.iter().map(|v| v[dim]).sum::<f32>() / assigned_vectors.len() as f32;
-                        // Apply learning rate for gradual update
-                        centroid[dim] = centroid[dim] * (1.0 - self.learning_rate) + mean * self.learning_rate;
+                        let values: Vec<f32> = assigned_vectors.iter()
+                            .map(|v| if dim < v.len() { v[dim] } else { 0.0 })
+                            .collect();
+                        
+                        let mean = self.stability_guard.safe_mean(&values);
+                        let new_val = self.stability_guard.safe_weighted_update(centroid[dim], mean, adaptive_lr);
+                        centroid[dim] = new_val;
                     }
                 }
             }
@@ -306,12 +341,14 @@ impl TeacherGuidedRefiner {
                     }
                 }
                 
-                // Update L2 centroid as mean of assigned residuals
+                // Update L2 centroid as mean of assigned residuals with comprehensive stability protection
                 if !assigned_residuals.is_empty() {
                     let centroid = &mut codebooks.level2_codebooks[subspace_idx][centroid_idx].centroid;
                     for dim in 0..centroid.len() {
-                        let mean = assigned_residuals.iter().map(|v| v[dim]).sum::<f32>() / assigned_residuals.len() as f32;
-                        centroid[dim] = centroid[dim] * (1.0 - self.learning_rate) + mean * self.learning_rate;
+                        let values: Vec<f32> = assigned_residuals.iter().map(|v| v[dim]).collect();
+                        let mean = self.stability_guard.safe_mean(&values);
+                        let new_val = self.stability_guard.safe_weighted_update(centroid[dim], mean, self.learning_rate);
+                        centroid[dim] = new_val;
                     }
                 }
             }
@@ -387,7 +424,7 @@ mod tests {
     
     #[test]
     fn test_mse_loss() {
-        let refiner = TeacherGuidedRefiner::new(10, 1.0, 0.5, 0.001);
+        let mut refiner = TeacherGuidedRefiner::new(10, 1.0, 0.5, 0.001);
         let original = vec![1.0, 2.0, 3.0, 4.0];
         let reconstructed = vec![1.1, 1.9, 3.1, 3.9];
         

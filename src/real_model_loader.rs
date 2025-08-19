@@ -82,22 +82,45 @@ impl RealModelLoader {
         let offset = 8 + header_len as u64;
         
         for (tensor_name, tensor_info) in header {
+            // Skip SafeTensors metadata entries - they contain format info, not tensors
+            if tensor_name == "__metadata__" {
+                continue;
+            }
+            
             if let Some(tensor_obj) = tensor_info.as_object() {
                 let dtype = tensor_obj.get("dtype")
                     .and_then(|v| v.as_str())
                     .unwrap_or("F32");
-                let shape = tensor_obj.get("shape")
-                    .and_then(|v| v.as_array())
-                    .ok_or("Invalid shape")?
-                    .iter()
-                    .filter_map(|v| v.as_u64().map(|n| n as usize))
-                    .collect::<Vec<_>>();
+                let shape = if let Some(shape_array) = tensor_obj.get("shape").and_then(|v| v.as_array()) {
+                    shape_array.iter()
+                        .filter_map(|v| {
+                            // Try as u64 first, then as i64, then as f64
+                            v.as_u64()
+                                .map(|n| n as usize)
+                                .or_else(|| v.as_i64().map(|n| n as usize))
+                                .or_else(|| v.as_f64().map(|n| n as usize))
+                        })
+                        .collect::<Vec<_>>()
+                } else {
+                    return Err(format!("Invalid shape for tensor '{}': shape field missing or not an array", tensor_name).into());
+                };
+                
+                if shape.is_empty() {
+                    return Err(format!("Empty shape for tensor '{}'", tensor_name).into());
+                }
                 
                 let data_offsets = tensor_obj.get("data_offsets")
                     .and_then(|v| v.as_array())
-                    .ok_or("Invalid data_offsets")?;
-                let start_offset = data_offsets[0].as_u64().unwrap_or(0) as u64;
-                let end_offset = data_offsets[1].as_u64().unwrap_or(0) as u64;
+                    .ok_or_else(|| format!("Invalid data_offsets for tensor '{}': field missing or not an array", tensor_name))?;
+                
+                if data_offsets.len() != 2 {
+                    return Err(format!("Invalid data_offsets for tensor '{}': expected 2 elements, got {}", tensor_name, data_offsets.len()).into());
+                }
+                
+                let start_offset = data_offsets[0].as_u64()
+                    .ok_or_else(|| format!("Invalid start offset for tensor '{}': not a valid number", tensor_name))? as u64;
+                let end_offset = data_offsets[1].as_u64()
+                    .ok_or_else(|| format!("Invalid end offset for tensor '{}': not a valid number", tensor_name))? as u64;
                 let tensor_size = (end_offset - start_offset) as usize;
                 
                 // Seek to tensor data

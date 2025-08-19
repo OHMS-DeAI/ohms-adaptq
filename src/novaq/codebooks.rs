@@ -39,19 +39,37 @@ impl CodebookBuilder {
         let rows = weights.rows();
         let cols = weights.cols();
         
-        // Calculate subspace size
-        let subspace_size = cols / self.num_subspaces;
-        if cols % self.num_subspaces != 0 {
-            return Err("Weight matrix width must be divisible by number of subspaces".into());
+        // Calculate effective subspaces and subspace size
+        // Automatically adjust subspaces to fit tensor dimensions
+        let effective_subspaces = if cols < self.num_subspaces {
+            // For small tensors, use fewer subspaces
+            cols
+        } else {
+            // Find largest divisor <= num_subspaces that divides cols
+            let mut best_subspaces = 1;
+            for s in 1..=self.num_subspaces {
+                if cols % s == 0 {
+                    best_subspaces = s;
+                }
+            }
+            best_subspaces
+        };
+        
+        let subspace_size = cols / effective_subspaces;
+        
+        // Log adjustment if needed
+        if effective_subspaces != self.num_subspaces {
+            eprintln!("NOVAQ: Adjusted subspaces from {} to {} for tensor width {} (subspace size: {})", 
+                self.num_subspaces, effective_subspaces, cols, subspace_size);
         }
         
-        let mut level1_codebooks = Vec::with_capacity(self.num_subspaces);
-        let mut level2_codebooks = Vec::with_capacity(self.num_subspaces);
-        let mut level1_indices = vec![vec![0u8; self.num_subspaces]; rows];
-        let mut level2_indices = vec![vec![0u8; self.num_subspaces]; rows];
+        let mut level1_codebooks = Vec::with_capacity(effective_subspaces);
+        let mut level2_codebooks = Vec::with_capacity(effective_subspaces);
+        let mut level1_indices = vec![vec![0u8; effective_subspaces]; rows];
+        let mut level2_indices = vec![vec![0u8; effective_subspaces]; rows];
         
         // Process each subspace
-        for subspace_idx in 0..self.num_subspaces {
+        for subspace_idx in 0..effective_subspaces {
             let start_col = subspace_idx * subspace_size;
             let end_col = start_col + subspace_size;
             
