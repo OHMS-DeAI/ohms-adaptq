@@ -83,14 +83,18 @@ impl RealModelLoader {
         
         for (tensor_name, tensor_info) in header {
             if let Some(tensor_obj) = tensor_info.as_object() {
-                let dtype = tensor_obj["dtype"].as_str().unwrap_or("F32");
-                let shape = tensor_obj["shape"].as_array()
+                let dtype = tensor_obj.get("dtype")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("F32");
+                let shape = tensor_obj.get("shape")
+                    .and_then(|v| v.as_array())
                     .ok_or("Invalid shape")?
                     .iter()
                     .filter_map(|v| v.as_u64().map(|n| n as usize))
                     .collect::<Vec<_>>();
                 
-                let data_offsets = tensor_obj["data_offsets"].as_array()
+                let data_offsets = tensor_obj.get("data_offsets")
+                    .and_then(|v| v.as_array())
                     .ok_or("Invalid data_offsets")?;
                 let start_offset = data_offsets[0].as_u64().unwrap_or(0) as u64;
                 let end_offset = data_offsets[1].as_u64().unwrap_or(0) as u64;

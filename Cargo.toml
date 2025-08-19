@@ -1,6 +1,6 @@
 [package]
 name = "ohms-adaptq"
-version = "2.0.1"
+version = "2.0.2"
 edition = "2021"
 authors = ["Dedan Okware <softengdedan@gmail.com>"]
 description = "NOVAQ: Normalized Outlier-Vector Additive Quantization - Democratic 93-100x LLM compression with 99%+ accuracy retention. No restrictions, no gatekeeping."
