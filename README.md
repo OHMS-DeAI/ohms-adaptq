@@ -1,9 +1,9 @@
 # OHMS AdaptQ - NOVAQ: Democratic AI Model Compression Engine
 
-[![OHMS 2.0](https://img.shields.io/badge/OHMS-2.0-blue.svg)](https://github.com/ohms-2-0)
-[![NOVAQ](https://img.shields.io/badge/NOVAQ-93--100x_Compression-blue.svg)](https://github.com/ohms-2-0/ohms-adaptq)
+[![OHMS 2.0](https://img.shields.io/badge/OHMS-2.0-blue.svg)](https://github.com/OHMS-DeAI)
+[![NOVAQ](https://img.shields.io/badge/NOVAQ-93--100x_Compression-blue.svg)](https://github.com/OHMS-DeAI/ohms-adaptq)
 [![Rust](https://img.shields.io/badge/Rust-1.70+-orange.svg)](https://rust-lang.org/)
-[![CLI](https://img.shields.io/badge/CLI-Tool-green.svg)](https://github.com/ohms-2-0/ohms-adaptq)
+[![CLI](https://img.shields.io/badge/CLI-Tool-green.svg)](https://github.com/OHMS-DeAI/ohms-adaptq)
 
 **Democratic Access to Revolutionary AI Compression** - NOVAQ enables 93-100x model compression with <1% quality loss. **Completely open and accessible to everyone. No restrictions, no gatekeeping, pure technological advancement.**
 
@@ -187,7 +187,7 @@ graph LR
 
 ```bash
 # Clone the repository
-git clone https://github.com/ohms-2-0/ohms-adaptq.git
+git clone https://github.com/OHMS-DeAI/ohms-adaptq.git
 cd ohms-adaptq
 
 # Build the NOVAQ CLI
@@ -473,7 +473,7 @@ graph LR
 
 ```bash
 # Clone repository
-git clone https://github.com/ohms-2-0/ohms-adaptq.git
+git clone https://github.com/OHMS-DeAI/ohms-adaptq.git
 cd ohms-adaptq
 
 # Install dependencies
@@ -568,7 +568,7 @@ cargo test test_quality_preservation -- --nocapture
 
 ### Community
 - [OHMS Discord](https://discord.gg/ohms)
-- [GitHub Repository](https://github.com/ohms-2-0/ohms-adaptq)
+- [GitHub Repository](https://github.com/OHMS-DeAI/ohms-adaptq)
 - [Community Forum](https://forum.ohms.ai/)
 - [Research Papers](https://research.ohms.ai/)
 
